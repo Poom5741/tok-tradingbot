@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Mapping, Sequence
 
 from common import Settings
 
@@ -15,19 +15,26 @@ from .agents.base import AgentResult
 def write_transcript(
     results: Sequence[AgentResult],
     settings: Settings,
-    *,
     output_path: str | Path | None = None,
-    metadata: dict[str, str] | None = None,
+    metadata: Mapping[str, str] | None = None,
+    *,
+    namespace: str | None = None,
+    filename: str | None = None,
 ) -> Path:
     """Persist a workflow transcript to disk and return the file path."""
-    destination = _resolve_destination(settings, output_path)
+    destination = _resolve_destination(
+        settings,
+        output_path,
+        namespace=namespace,
+        filename=filename,
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "environment": settings.environment,
         "agents": [result.agent_name for result in results],
-        "metadata": metadata or {},
+        "metadata": dict(metadata or {}),
         "entries": [
             {
                 "agent": result.agent_name,
@@ -42,11 +49,25 @@ def write_transcript(
     return destination
 
 
-def _resolve_destination(settings: Settings, output_path: str | Path | None) -> Path:
+def _resolve_destination(
+    settings: Settings,
+    output_path: str | Path | None,
+    *,
+    namespace: str | None = None,
+    filename: str | None = None,
+) -> Path:
     if output_path:
         return Path(output_path)
 
-    return settings.transcripts_dir / f"workflow_{_timestamp_token()}.json"
+    folder = settings.transcripts_dir
+    if namespace:
+        folder = folder / namespace
+
+    token = filename or f"workflow_{_timestamp_token()}.json"
+    if not token.endswith(".json"):
+        token = f"{token}.json"
+
+    return folder / token
 
 
 def _timestamp_token() -> str:

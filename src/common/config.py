@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple
 
 from dotenv import dotenv_values
 
@@ -30,6 +30,7 @@ class Settings:
     default_agent: str = DEFAULT_AGENT
     agent_modules: Tuple[str, ...] = DEFAULT_AGENT_MODULES
     transcripts_dir: Path = DEFAULT_TRANSCRIPTS_DIR
+    github_repo: Optional[str] = None
 
     @classmethod
     def from_env(cls, *, env_files: Iterable[str] | None = None) -> "Settings":
@@ -56,6 +57,13 @@ class Settings:
             value = get_override(key)
             return value if value is not None else default
 
+        def lookup_optional(key: str) -> Optional[str]:
+            value = get_override(key)
+            if value is None:
+                return None
+            stripped = value.strip()
+            return stripped or None
+
         raw_modules = get_override("TOKBOT_AGENT_MODULES")
         extra_modules: Tuple[str, ...] = ()
         if raw_modules:
@@ -79,4 +87,5 @@ class Settings:
             default_agent=lookup("TOKBOT_DEFAULT_AGENT", DEFAULT_AGENT),
             agent_modules=tuple(deduped_modules.keys()),
             transcripts_dir=transcripts_dir,
+            github_repo=lookup_optional("TOKBOT_GITHUB_REPO"),
         )

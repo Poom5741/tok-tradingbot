@@ -34,7 +34,9 @@
     "run_echo": "python -m tokbot run echo --message 'Hello'",
     "run_upper": "python -m tokbot run uppercase --message 'Hello'",
     "run_planner": "python -m tokbot run planner --message 'Outline feature'",
-    "workflow": "python -m tokbot workflow --message 'Ship feature' --output artifacts/transcripts/demo.json",
+    "workflow": "python -m tokbot workflow --message 'Ship feature' --namespace demo --filename summary --meta issue=123 --meta priority=high",
+    "issue_read": "python -m tokbot issue read --issue 123 --repo owner/repo",
+    "issue_comment": "python -m tokbot issue comment --issue 123 --body 'Agent update'",
     "run_with_env": "python -m tokbot --env-file .env run --message 'Ping'"
   }
 }

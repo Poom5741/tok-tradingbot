@@ -121,3 +121,100 @@ def test_workflow_no_save_respects_flag(tmp_path: Path, capsys, monkeypatch) -> 
     assert exit_code == 0
     assert "Transcript saved" not in captured.out
     assert not any(tmp_path.iterdir())
+
+
+def test_workflow_namespace_and_meta(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("TOKBOT_TRANSCRIPTS_DIR", str(tmp_path))
+
+    exit_code = run_cli([
+        "workflow",
+        "--message",
+        "Ship feature",
+        "--namespace",
+        "demo",
+        "--filename",
+        "summary",
+        "--meta",
+        "issue=123",
+        "--meta",
+        "priority=high",
+    ])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Transcript saved" in captured.out
+
+    transcript_file = tmp_path / "demo" / "summary.json"
+    assert transcript_file.exists()
+
+    payload = json.loads(transcript_file.read_text(encoding="utf-8"))
+    assert payload["metadata"]["initial_message"] == "Ship feature"
+    assert payload["metadata"]["issue"] == "123"
+    assert payload["metadata"]["priority"] == "high"
+
+
+def test_issue_read_uses_github_client(monkeypatch, capsys) -> None:
+    captured_args = {}
+
+    class FakeClient:
+        def __init__(self, repo=None):
+            captured_args["repo"] = repo
+
+        def read_issue(self, issue_number: int) -> dict:
+            captured_args["issue"] = issue_number
+            return {
+                "number": issue_number,
+                "title": "Demo Issue",
+                "body": "Issue body",
+                "comments_data": [
+                    {"user": {"login": "alice"}, "body": "Looks good"},
+                    {"user": {"login": "bob"}, "body": "Needs work"},
+                ],
+            }
+
+    monkeypatch.setattr("tokbot.cli.GitHubClient", FakeClient)
+
+    exit_code = run_cli([
+        "issue",
+        "read",
+        "--issue",
+        "7",
+        "--repo",
+        "octo/demo",
+        "--limit",
+        "1",
+    ])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert captured_args == {"repo": "octo/demo", "issue": 7}
+    assert "Issue #7 | Demo Issue" in captured.out
+    assert "@alice" in captured.out
+    assert "@bob" not in captured.out  # limited to 1 comment
+
+
+def test_issue_comment_posts_using_client(monkeypatch, capsys) -> None:
+    calls: list[tuple[int, str]] = []
+
+    class FakeClient:
+        def __init__(self, repo=None):
+            self.repo = repo
+
+        def create_comment(self, issue_number: int, body: str) -> None:
+            calls.append((issue_number, body))
+
+    monkeypatch.setattr("tokbot.cli.GitHubClient", FakeClient)
+
+    exit_code = run_cli([
+        "issue",
+        "comment",
+        "--issue",
+        "9",
+        "--body",
+        "Automated note",
+    ])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert calls == [(9, "Automated note")]
+    assert "Comment posted to issue #9." in captured.out
