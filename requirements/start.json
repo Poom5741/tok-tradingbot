@@ -1,0 +1,116 @@
+{
+  "goal": "Create a dockerized, on-chain-only microstructure trading bot for a single AMM pair (V2-style), using tiny probe trades to detect reaction (FT/IP/SE), with Telegram control (status/kill/resume), adaptive cadence (no gas drain), circuit breakers (LP drain, daily gas/loss caps), and basic metrics.",
+  "stack": {
+    "lang": "TypeScript",
+    "runtime": "Node.js 20",
+    "packages": [
+      "viem",
+      "zod",
+      "yaml",
+      "ioredis",
+      "telegraf",
+      "pino",
+      "pino-pretty",
+      "prom-client",
+      "undici"
+    ],
+    "infra": [
+      "Docker",
+      "docker-compose",
+      "Redis",
+      "Prometheus",
+      "Grafana (optional)"
+    ]
+  },
+  "repo_structure": [
+    "docker-compose.yml",
+    ".env",
+    "config.yaml",
+    "packages/shared/src/{config.ts,redis.ts,metrics.ts,math.ts,types.ts}",
+    "packages/strategy/{Dockerfile,package.json,tsconfig.json,src/{index.ts,stateMachine.ts,healthcheck.js,signals/{twap.ts,ofi.ts,liquidity.ts,mempoolPressure.ts,probe.ts},exec/{router.ts,slippage.ts},risk/{circuitBreakers.ts,cadence.ts}}}",
+    "packages/mempool/{Dockerfile,package.json,tsconfig.json,src/{index.ts,watchers/routers.ts,publish.ts,healthcheck.js}}",
+    "packages/bot/{Dockerfile,package.json,tsconfig.json,src/{index.ts,commands.ts,views.ts,auth.ts,healthcheck.js}}",
+    "monitoring/{prometheus.yml,grafana-provisioning/}"
+  ],
+  "files": {
+    "docker-compose.yml": "version: \"3.9\"\nservices:\n  redis:\n    image: redis:7-alpine\n    command: [\"redis-server\",\"--save\",\"60\",\"1\",\"--loglevel\",\"warning\"]\n    ports: [\"6379:6379\"]\n    healthcheck: { test: [\"CMD\",\"redis-cli\",\"ping\"], interval: \"10s\", timeout: \"2s\", retries: 5 }\n  strategy:\n    build: ./packages/strategy\n    env_file: .env\n    depends_on: [redis]\n    restart: unless-stopped\n    healthcheck: { test: [\"CMD\",\"node\",\"healthcheck.js\"], interval: \"15s\", timeout: \"5s\", retries: 5 }\n  mempool:\n    build: ./packages/mempool\n    env_file: .env\n    depends_on: [redis]\n    restart: unless-stopped\n    healthcheck: { test: [\"CMD\",\"node\",\"healthcheck.js\"], interval: \"15s\", timeout: \"5s\", retries: 5 }\n  bot:\n    build: ./packages/bot\n    env_file: .env\n    depends_on: [redis, strategy]\n    restart: unless-stopped\n    healthcheck: { test: [\"CMD\",\"node\",\"healthcheck.js\"], interval: \"15s\", timeout: \"5s\", retries: 5 }\n  prometheus:\n    image: prom/prometheus:v2.54.1\n    volumes: [\"./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro\"]\n    ports: [\"9090:9090\"]\n    restart: unless-stopped\n  grafana:\n    image: grafana/grafana:11.1.4\n    ports: [\"3001:3000\"]\n    environment: [\"GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASS:-admin}\"]\n    volumes: [\"./monitoring/grafana-provisioning:/etc/grafana/provisioning\"]\n    depends_on: [prometheus]\n    restart: unless-stopped\n",
+    ".env": "# RPC + chain\nRPC_URL=wss://YOUR_NODE_WEBSOCKET\nCHAIN_ID=56\nPAIR_ADDRESS=0xYourPair\nTOKEN0=0xToken0\nTOKEN1=0xToken1\n# Private relays (optional)\nFLASHBOTS_RPC_URL=\nBUILDER_RELAY_URL=\n# Hot key (testing only)\nBOT_PK=0xYOUR_PRIVATE_KEY\n# Telegram\nTELEGRAM_BOT_TOKEN=123456:ABC-XYZ\nTELEGRAM_ADMIN_ID=123456789\n# Grafana\nGRAFANA_ADMIN_PASS=admin\n# Ops\nGAS_CAP_GWEI=35\nDAILY_GAS_BUDGET_USD=30\nMAX_CONCURRENT_POSITIONS=1\n",
+    "config.yaml": "pair:\n  fee_bps: 25\n  base_symbol: WBNB\n  quote_symbol: MEME\nprobe:\n  notional_usd: 50\n  w1_blocks: 2\n  w2_blocks: 8\n  cooldown_s: 25\n  min_block_gap: 1\nsignals:\n  ft_threshold: 1.8\n  ip_bps_threshold: 5\n  se_bps_per_$100_min: 0.5\n  se_bps_per_$100_max: 6.0\n  ofi_norm_threshold: 2.0\n  dev_twap_sec: 300\n  tp_bps: 18\n  sl_bps: 12\n  time_stop_s: 90\nliquidity:\n  ld_lookback_blocks: 10\n  ld_max_positive: 0\n  ld_drain_exit_pct: 2.0\nmempool:\n  enable: true\n  pbp_weight: 1.0\n  psp_weight: 1.0\n  ambig_ratio_stop: 1.2\nrisk:\n  max_slippage_bps: 10\n  per_trade_notional_usd:\n    min: 100\n    max: 1500\n  sizing:\n    k_ft: 0.5\n    k_ip: 0.05\n    k_dev: 0.03\n    liquidity_scale: true\nscheduling:\n  min_trades_per_hour: 6\n  max_trades_per_hour: 18\n  quiet_mode_threshold_min: 5\nops_guards:\n  gas_cap_gwei: 35\n  daily_gas_budget_usd: 30\n  daily_loss_cap_usd: 100\n  drawdown_cap_pct: 3.5\n",
+    "packages/shared/src/types.ts": "import { z } from 'zod';\nexport type Swap = { block:number; ts:number; buyToken1:boolean; notionalUSD:number; price:number };\nexport type WindowStats = { FT:number; IP:number; OFI:number; LD:number; DEV:number; PBP:number; PSP:number; SE:number };\nexport type BreakerResult = { stop:boolean; reason?:string };\nexport const Cfg = z.object({/* keep empty here; loaded in config.ts */});\nexport type Cfg = z.infer<typeof Cfg>;\n",
+    "packages/shared/src/config.ts": "import fs from 'node:fs';\nimport YAML from 'yaml';\nexport type Cfg = any;\nexport function loadCfg(): Cfg {\n  const raw = fs.readFileSync('./config.yaml','utf8');\n  return YAML.parse(raw);\n}\n",
+    "packages/shared/src/redis.ts": "import Redis from 'ioredis';\nexport const redis = new Redis(process.env.REDIS_URL||'redis://redis:6379');\nexport const X_MEMPOOL = 'x:mempool';\nexport const X_SIGNALS = 'x:signals';\nexport const KV = {\n  LAST_PROBE_BLOCK: 'kv:last_probe_block',\n  DAILY_GAS_USD: 'kv:daily_gas_usd',\n  DAILY_PNL_USD: 'kv:daily_pnl_usd',\n  DRAWDOWN_PCT: 'kv:drawdown_pct'\n};\n",
+    "packages/shared/src/metrics.ts": "import client from 'prom-client';\nclient.collectDefaultMetrics();\nexport const pnlTotal = new client.Gauge({ name:'bot_pnl_usd_total', help:'PnL USD total' });\nexport const gasDaily = new client.Gauge({ name:'bot_daily_gas_usd', help:'Gas spent today USD' });\nexport const pingCount = new client.Counter({ name:'ping_count', help:'Number of probes' });\nexport const entryCount = new client.Counter({ name:'entry_count', help:'Number of entries' });\nexport const breakerEvents = new client.Counter({ name:'breaker_events', help:'Breaker fires', labelNames:['reason'] });\nexport { client as promClient };\n",
+    "packages/shared/src/math.ts": "export const clamp = (x:number,a:number,b:number)=>Math.max(a,Math.min(b,x));\nexport const bps = (x:number)=>x*1e4;\nexport const fromBps = (b:number)=>b/1e4;\n",
+    "packages/strategy/Dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci --omit=dev\nCOPY tsconfig.json ./\nCOPY src ./src\nCMD [\"node\",\"-r\",\"ts-node/register\",\"src/index.ts\"]\n",
+    "packages/strategy/package.json": "{\n  \"name\":\"strategy\",\"version\":\"0.1.0\",\"type\":\"module\",\n  \"scripts\":{ \"start\":\"node -r ts-node/register src/index.ts\" },\n  \"dependencies\":{\n    \"viem\":\"^2.13.5\",\"zod\":\"^3.23.8\",\"yaml\":\"^2.5.0\",\"ioredis\":\"^5.4.1\",\"pino\":\"^9.3.2\",\"prom-client\":\"^15.1.2\"\n  },\n  \"devDependencies\":{ \"ts-node\":\"^10.9.2\",\"typescript\":\"^5.5.4\" }\n}\n",
+    "packages/strategy/tsconfig.json": "{ \"compilerOptions\": { \"target\":\"ES2021\",\"module\":\"ES2022\",\"moduleResolution\":\"bundler\",\"esModuleInterop\":true,\"strict\":true,\"skipLibCheck\":true }, \"ts-node\": { \"transpileOnly\": true } }",
+    "packages/strategy/src/healthcheck.js": "process.exit(0)",
+    "packages/strategy/src/index.ts": "import pino from 'pino';\nimport { loadCfg } from '../../shared/src/config.js';\nimport { redis, KV } from '../../shared/src/redis.js';\nimport { promClient } from '../../shared/src/metrics.js';\nimport fastify from 'fastify';\nimport { runStateMachine } from './stateMachine.js';\nconst log = pino({ level: process.env.LOG_LEVEL||'info' });\nconst cfg = loadCfg();\n(async () => {\n  const app = fastify();\n  app.get('/metrics', async (_req, reply)=>{ reply.header('Content-Type', promClient.register.contentType); reply.send(await promClient.register.metrics()); });\n  app.listen({ host:'0.0.0.0', port: 9100 }).catch(()=>{});\n  await redis.set(KV.DAILY_GAS_USD, 0, 'EX', 86400);\n  await runStateMachine(cfg, log);\n})();\n",
+    "packages/strategy/src/stateMachine.ts": "import { redis, KV } from '../../shared/src/redis.js';\nimport { pingCount, entryCount, breakerEvents } from '../../shared/src/metrics.js';\nimport { checkBreakers } from './risk/circuitBreakers.js';\nimport { nextProbeDelaySec } from './risk/cadence.js';\nimport { doProbe } from './signals/probe.js';\nimport { maybeEnter, managePosition } from './exec/router.js';\nexport async function runStateMachine(cfg:any, log:any){\n  let tradingOn = true;\n  for(;;){\n    // breakers\n    const state = await readState();\n    const br = checkBreakers(state, cfg);\n    if (br.stop){ tradingOn=false; breakerEvents.inc({reason: br.reason||'UNKNOWN'}); log.warn({reason:br.reason}, 'CIRCUIT_BREAKER'); await sleep(5_000); continue; }\n\n    const delaySec = await nextProbeDelaySec({ cfg });\n    if (!Number.isFinite(delaySec)) { await sleep(3_000); continue; }\n\n    await sleep(delaySec*1000);\n    pingCount.inc();\n    const sig = await doProbe(cfg, log);\n    if (!tradingOn) continue;\n    const tx = await maybeEnter(sig, cfg, log);\n    if (tx){ entryCount.inc(); await managePosition(tx, cfg, log); }\n  }\n}\nasync function readState(){\n  const [gas, pnl, dd] = await redis.mget(KV.DAILY_GAS_USD, KV.DAILY_PNL_USD, KV.DRAWDOWN_PCT);\n  return { dailyGasUsd: Number(gas||0), dailyLossUsd: -Math.min(0, Number(pnl||0)), drawdownPct: Number(dd||0), lpDrainPct2Blocks: 0 };\n}\nconst sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));\n",
+    "packages/strategy/src/signals/probe.ts": "import { pingCount } from '../../../shared/src/metrics.js';\nexport async function doProbe(cfg:any, log:any){\n  // NOTE: stub for vibe-coding — wire real viem calls here\n  // Should: read reserves, send tiny swap via private relay, compute FT/IP/SE using recent swaps and W1/W2 windows\n  log.info({notional: cfg.probe.notional_usd}, 'PROBE_SENT');\n  return { FT: 2.0, IP: 6, OFI: 2.1, LD: -0.5, DEV: 4, PBP: 200, PSP: 80, SE: 1.2 };\n}\n",
+    "packages/strategy/src/signals/twap.ts": "export async function twapSpotDevBps(){ return 5; }\n",
+    "packages/strategy/src/signals/ofi.ts": "export async function ofi(){ return 2.2; }\n",
+    "packages/strategy/src/signals/liquidity.ts": "export async function liquidityDelta(){ return -0.3; }\n",
+    "packages/strategy/src/signals/mempoolPressure.ts": "export async function mempoolPressure(){ return { PBP: 100, PSP: 60 }; }\n",
+    "packages/strategy/src/exec/router.ts": "import { clamp } from '../../../shared/src/math.js';\nexport async function maybeEnter(sig:any, cfg:any, log:any){\n  const ok = sig.FT>cfg.signals.ft_threshold && sig.IP>cfg.signals.ip_bps_threshold && sig.PBP>sig.PSP && sig.LD<=0 && sig.SE>cfg.signals.se_bps_per_$100_min && sig.SE<cfg.signals.se_bps_per_$100_max;\n  if (!ok) return null;\n  const intensity = Math.min(1, 0.5*sig.FT + 0.05*Math.abs(sig.IP) + 0.03*Math.abs(sig.DEV));\n  const notional = clamp(intensity*cfg.risk.per_trade_notional_usd.max, cfg.risk.per_trade_notional_usd.min, cfg.risk.per_trade_notional_usd.max);\n  log.info({notional, sig}, 'ENTER');\n  return { direction: 'buy', notional, openedAt: Date.now() };\n}\nexport async function managePosition(pos:any, cfg:any, log:any){\n  const start=Date.now();\n  for(;;){\n    const elapsed = (Date.now()-start)/1000;\n    const markoutBps = 12; // stub\n    if (markoutBps>=cfg.signals.tp_bps || markoutBps<=-cfg.signals.sl_bps || elapsed>cfg.signals.time_stop_s){\n      log.info({pnl_bps:markoutBps, elapsed}, 'EXIT');\n      return;\n    }\n    await new Promise(r=>setTimeout(r, 1200));\n  }\n}\n",
+    "packages/strategy/src/exec/slippage.ts": "export function maxSlip(cfg:any){ return cfg.risk.max_slippage_bps; }\n",
+    "packages/strategy/src/risk/cadence.ts": "export async function nextProbeDelaySec(ctx:any){\n  const cfg = ctx.cfg; let delay = cfg.probe.cooldown_s;\n  const gasGwei = Number(process.env.GAS_CAP_GWEI||cfg.ops_guards.gas_cap_gwei);\n  const swaps10m = 10; // stub: replace with rolling swap counter\n  const lastSignals = [{FT:1.5,IP:4},{FT:2.1,IP:7},{FT:1.8,IP:6}];\n  if (gasGwei>cfg.ops_guards.gas_cap_gwei) delay*=2;\n  if (swaps10m<cfg.scheduling.quiet_mode_threshold_min) delay*=2;\n  const weak = lastSignals.slice(-3).filter((s:any)=> s.FT<cfg.signals.ft_threshold || s.IP<cfg.signals.ip_bps_threshold);\n  if (weak.length>=2) delay*=1.5;\n  // block-gap guard (stub)\n  const blocksSinceLastProbe = 2;\n  if (blocksSinceLastProbe<cfg.probe.min_block_gap) return Infinity;\n  return Math.round(delay);\n}\n",
+    "packages/strategy/src/risk/circuitBreakers.ts": "import { breakerEvents } from '../../../shared/src/metrics.js';\nexport function checkBreakers(state:any, cfg:any){\n  if (state.dailyGasUsd >= cfg.ops_guards.daily_gas_budget_usd) return { stop:true, reason:'DAILY_GAS_BUDGET' };\n  if (state.dailyLossUsd <= -cfg.ops_guards.daily_loss_cap_usd) return { stop:true, reason:'DAILY_LOSS' };\n  if (state.drawdownPct <= -cfg.ops_guards.drawdown_cap_pct) return { stop:true, reason:'DRAWDOWN' };\n  if (state.lpDrainPct2Blocks >= cfg.liquidity.ld_drain_exit_pct) return { stop:true, reason:'LP_DRAIN' };\n  return { stop:false };\n}\n",
+    "packages/mempool/Dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci --omit=dev\nCOPY tsconfig.json ./\nCOPY src ./src\nCMD [\"node\",\"-r\",\"ts-node/register\",\"src/index.ts\"]\n",
+    "packages/mempool/package.json": "{ \"name\":\"mempool\",\"version\":\"0.1.0\",\"type\":\"module\",\"scripts\":{ \"start\":\"node -r ts-node/register src/index.ts\" },\"dependencies\":{ \"viem\":\"^2.13.5\",\"ioredis\":\"^5.4.1\",\"pino\":\"^9.3.2\" },\"devDependencies\":{ \"ts-node\":\"^10.9.2\",\"typescript\":\"^5.5.4\" } }",
+    "packages/mempool/tsconfig.json": "{ \"compilerOptions\": { \"target\":\"ES2021\",\"module\":\"ES2022\",\"moduleResolution\":\"bundler\",\"esModuleInterop\":true,\"strict\":true,\"skipLibCheck\":true }, \"ts-node\": { \"transpileOnly\": true } }",
+    "packages/mempool/src/healthcheck.js": "process.exit(0)",
+    "packages/mempool/src/index.ts": "import pino from 'pino';\nimport { redis, X_MEMPOOL } from '../../shared/src/redis.js';\nconst log = pino({ level: process.env.LOG_LEVEL||'info' });\n(async()=>{\n  // TODO: connect WS RPC, parse pending router swaps touching pair; publish JSON to Redis stream X_MEMPOOL\n  setInterval(async()=>{\n    await redis.xadd(X_MEMPOOL, '*', 'ev', JSON.stringify({ type:'pending', side:'buy', notionalUSD:100 }));\n  }, 2000);\n  log.info('mempool watcher running');\n})();\n",
+    "packages/mempool/src/watchers/routers.ts": "// TODO: decode router calldata for swapExactTokensFor... and paths involving the pair tokens\n",
+    "packages/mempool/src/publish.ts": "// helpers for publishing to Redis streams",
+    "packages/bot/Dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci --omit=dev\nCOPY tsconfig.json ./\nCOPY src ./src\nCMD [\"node\",\"-r\",\"ts-node/register\",\"src/index.ts\"]\n",
+    "packages/bot/package.json": "{ \"name\":\"tg-bot\",\"version\":\"0.1.0\",\"type\":\"module\",\"scripts\":{ \"start\":\"node -r ts-node/register src/index.ts\" },\"dependencies\":{ \"telegraf\":\"^4.16.3\",\"ioredis\":\"^5.4.1\",\"pino\":\"^9.3.2\" },\"devDependencies\":{ \"ts-node\":\"^10.9.2\",\"typescript\":\"^5.5.4\" } }",
+    "packages/bot/tsconfig.json": "{ \"compilerOptions\": { \"target\":\"ES2021\",\"module\":\"ES2022\",\"moduleResolution\":\"bundler\",\"esModuleInterop\":true,\"strict\":true,\"skipLibCheck\":true }, \"ts-node\": { \"transpileOnly\": true } }",
+    "packages/bot/src/healthcheck.js": "process.exit(0)",
+    "packages/bot/src/index.ts": "import { Telegraf } from 'telegraf';\nimport pino from 'pino';\nconst log = pino({ level: process.env.LOG_LEVEL||'info' });\nconst bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN!);\nconst ADMIN = process.env.TELEGRAM_ADMIN_ID!;\nimport { registerCommands } from './commands.js';\nregisterCommands(bot, ADMIN, log);\nbot.launch();\nprocess.once('SIGINT', () => bot.stop('SIGINT'));\nprocess.once('SIGTERM', () => bot.stop('SIGTERM'));\n",
+    "packages/bot/src/commands.ts": "import type { Telegraf } from 'telegraf';\nexport function registerCommands(bot:Telegraf, ADMIN:string, log:any){\n  bot.start((ctx)=>ctx.reply('MemeFlow bot ready. /status /toggle /observe /kill /resume /set'));\n  bot.command('status', (ctx)=> ctx.reply('Status: ON, PnL: 0, Gas today: 0, Trades/hr: 0'));\n  bot.command('kill', (ctx)=> ctx.reply('KILL: all off (stub)'));\n  bot.command('resume', (ctx)=> ctx.reply('RESUME: trading on (stub)'));\n  bot.command('toggle', (ctx)=> ctx.reply('TOGGLE: (stub)'));\n  bot.command('observe', (ctx)=> ctx.reply('OBSERVE: entries off (stub)'));\n  bot.command('set', (ctx)=> ctx.reply('SET updated (stub)'));\n}\n",
+    "monitoring/prometheus.yml": "global: { scrape_interval: 5s }\nscrape_configs:\n  - job_name: 'strategy'\n    static_configs:\n      - targets: ['strategy:9100']\n"
+  },
+  "logic_notes": {
+    "probe_signal": "After a tiny swap probe, compute FT (same-opposite normalized by median size over last N swaps), IP (bps move from pre->post W1 in probe direction), SE (bps per $100 move caused by probe).",
+    "entry_rule": "Enter if FT>1.8 && IP>5bps && PBP>PSP && LD<=0 && SE in [0.5,6.0].",
+    "exit_rule": "Exit on TP 18bps or SL 12bps or time_stop 90s or OFI flip < -2 or LD>0.",
+    "cadence": "Adaptive cooldown doubles in quiet/gas-high/weak-signal regimes; block-gap guard prevents consecutive-block probes; trade/hr hard cap.",
+    "circuit_breakers": [
+      "DAILY_GAS_BUDGET",
+      "DAILY_LOSS",
+      "DRAWDOWN",
+      "LP_DRAIN>=2% in 2 blocks"
+    ]
+  },
+  "replace_these": [
+    "RPC_URL",
+    "CHAIN_ID",
+    "PAIR_ADDRESS",
+    "TOKEN0",
+    "TOKEN1",
+    "BOT_PK",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_ADMIN_ID"
+  ],
+  "run": [
+    "npm i -g pnpm",
+    "pnpm --filter ./packages/strategy add viem zod yaml ioredis pino prom-client ts-node typescript",
+    "pnpm --filter ./packages/mempool add viem ioredis pino ts-node typescript",
+    "pnpm --filter ./packages/bot add telegraf ioredis pino ts-node typescript",
+    "docker compose up --build"
+  ],
+  "todo_vibe": [
+    "Wire real viem client: WS provider -> subscribe to Pair Swap/Sync/Mint/Burn; compute reserves, TWAP.",
+    "Implement real probe swap via private relay if provided, otherwise normal router with strict max slippage.",
+    "Implement mempool routers decoder to compute PBP/PSP for the pair path.",
+    "Persist rolling windows in Redis (median swap size, swaps10m, LP deltas).",
+    "Finish Telegram runtime setters to patch config in Redis (e.g., /set gascap 30).",
+    "Add PnL markout from on-chain midprice; log realized bps and gas to daily gauges."
+  ],
+  "risk_disclaimers": [
+    "Use private relays to avoid MEV sandwiches.",
+    "Start in observe mode; validate signals before enabling entries.",
+    "Set realistic gas/daily-loss caps for meme pairs; expect high variance."
+  ]
+}
