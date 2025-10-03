@@ -2,13 +2,35 @@
   "name": "tokBot",
   "entrypoint": "python -m tokbot",
   "description": "Modular automation agent with pluggable integrations.",
+  "environment": {
+    "python": "3.11",
+    "env_files": [".env", ".env.example"],
+    "variables": {
+      "TOKBOT_ENV": "Runtime environment label (development, staging, production)",
+      "TOKBOT_DEFAULT_AGENT": "Agent name executed when none is supplied",
+      "TOKBOT_AGENT_MODULES": "Comma-separated module paths exposing build_agent()"
+    }
+  },
+  "directories": {
+    "src": "Runtime source code (tokbot orchestrator, agents, integrations)",
+    "tests": "Pytest suites mirroring src package layout",
+    "assets/prompts": "Prompt templates and agent playbooks",
+    "assets/sample_payloads": "Example request/response fixtures",
+    "requirements": "Dependency manifests (base.txt, dev.txt)"
+  },
   "commands": {
     "create_venv": "python -m venv .venv && source .venv/bin/activate",
     "install_dev": "pip install -r requirements/dev.txt",
+    "install_prod": "pip install -r requirements/base.txt",
+    "copy_env": "cp .env.example .env",
+    "lint": "ruff check src tests",
+    "format": "ruff format src tests",
+    "tests": "pytest",
+    "tests_cov": "pytest --cov=tokbot --cov-report=term-missing",
     "list_agents": "python -m tokbot list",
+    "run_default": "python -m tokbot run --message 'Ping'",
     "run_echo": "python -m tokbot run echo --message 'Hello'",
     "run_upper": "python -m tokbot run uppercase --message 'Hello'",
-    "run_with_env": "python -m tokbot --env-file .env run --message 'Ping'",
-    "tests": "pytest"
+    "run_with_env": "python -m tokbot --env-file .env run --message 'Ping'"
   }
 }
