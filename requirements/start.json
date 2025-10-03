@@ -8,7 +8,8 @@
     "variables": {
       "TOKBOT_ENV": "Runtime environment label (development, staging, production)",
       "TOKBOT_DEFAULT_AGENT": "Agent name executed when none is supplied",
-      "TOKBOT_AGENT_MODULES": "Comma-separated module paths exposing build_agent()"
+      "TOKBOT_AGENT_MODULES": "Comma-separated module paths exposing build_agent()",
+      "TOKBOT_TRANSCRIPTS_DIR": "Directory for persisted workflow transcripts"
     }
   },
   "directories": {
@@ -16,7 +17,8 @@
     "tests": "Pytest suites mirroring src package layout",
     "assets/prompts": "Prompt templates and agent playbooks",
     "assets/sample_payloads": "Example request/response fixtures",
-    "requirements": "Dependency manifests (base.txt, dev.txt)"
+    "requirements": "Dependency manifests (base.txt, dev.txt)",
+    "artifacts/transcripts": "JSON transcripts emitted by workflow runs"
   },
   "commands": {
     "create_venv": "python -m venv .venv && source .venv/bin/activate",
@@ -32,7 +34,7 @@
     "run_echo": "python -m tokbot run echo --message 'Hello'",
     "run_upper": "python -m tokbot run uppercase --message 'Hello'",
     "run_planner": "python -m tokbot run planner --message 'Outline feature'",
-    "workflow": "python -m tokbot workflow --message 'Ship feature'",
+    "workflow": "python -m tokbot workflow --message 'Ship feature' --output artifacts/transcripts/demo.json",
     "run_with_env": "python -m tokbot --env-file .env run --message 'Ping'"
   }
 }

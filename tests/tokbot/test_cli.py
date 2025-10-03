@@ -1,5 +1,6 @@
 """Unit tests for tokBot CLI entrypoints."""
 
+import json
 from pathlib import Path
 
 from tokbot.cli import run_cli
@@ -38,7 +39,7 @@ def test_run_command_uses_env_file_default(tmp_path: Path, capsys) -> None:
 
 
 def test_workflow_runs_default_sequence(capsys) -> None:
-    exit_code = run_cli(["workflow", "--message", "Ship feature X"])
+    exit_code = run_cli(["workflow", "--message", "Ship feature X", "--no-save"])
     captured = capsys.readouterr()
 
     assert exit_code == 0
@@ -89,3 +90,34 @@ def build_agent() -> Agent:
     assert exit_code == 0
     assert "Agent: custom" in captured.out
     assert "processed hello" in captured.out
+
+
+def test_workflow_writes_transcript(tmp_path: Path, capsys) -> None:
+    destination = tmp_path / "transcript.json"
+    exit_code = run_cli([
+        "workflow",
+        "--message",
+        "Ship feature",
+        "--output",
+        str(destination),
+    ])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Transcript saved" in captured.out
+    assert destination.exists()
+
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["agents"] == ["planner", "builder", "auditor"]
+    assert payload["metadata"]["initial_message"] == "Ship feature"
+
+
+def test_workflow_no_save_respects_flag(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("TOKBOT_TRANSCRIPTS_DIR", str(tmp_path))
+
+    exit_code = run_cli(["workflow", "--message", "Ship feature", "--no-save"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Transcript saved" not in captured.out
+    assert not any(tmp_path.iterdir())

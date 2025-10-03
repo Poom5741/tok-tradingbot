@@ -19,6 +19,7 @@ DEFAULT_AGENT_MODULES: Tuple[str, ...] = (
     "tokbot.agents.builder",
     "tokbot.agents.auditor",
 )
+DEFAULT_TRANSCRIPTS_DIR = Path("artifacts/transcripts")
 
 
 @dataclass(slots=True)
@@ -28,6 +29,7 @@ class Settings:
     environment: str = DEFAULT_ENVIRONMENT
     default_agent: str = DEFAULT_AGENT
     agent_modules: Tuple[str, ...] = DEFAULT_AGENT_MODULES
+    transcripts_dir: Path = DEFAULT_TRANSCRIPTS_DIR
 
     @classmethod
     def from_env(cls, *, env_files: Iterable[str] | None = None) -> "Settings":
@@ -65,8 +67,16 @@ class Settings:
 
         deduped_modules = dict.fromkeys(DEFAULT_AGENT_MODULES + extra_modules)
 
+        transcripts_dir_raw = get_override("TOKBOT_TRANSCRIPTS_DIR")
+        transcripts_dir = (
+            Path(transcripts_dir_raw)
+            if transcripts_dir_raw
+            else DEFAULT_TRANSCRIPTS_DIR
+        )
+
         return cls(
             environment=lookup("TOKBOT_ENV", DEFAULT_ENVIRONMENT),
             default_agent=lookup("TOKBOT_DEFAULT_AGENT", DEFAULT_AGENT),
             agent_modules=tuple(deduped_modules.keys()),
+            transcripts_dir=transcripts_dir,
         )

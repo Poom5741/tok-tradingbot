@@ -9,6 +9,7 @@ from common import Settings, configure_logging
 
 from .bootstrap import build_registry
 from .orchestrator import TokBotOrchestrator
+from .transcript import write_transcript
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -46,6 +47,15 @@ def create_parser() -> argparse.ArgumentParser:
         "--message",
         default="",
         help="Initial message or objective to seed the workflow",
+    )
+    workflow_parser.add_argument(
+        "--output",
+        help="Optional file path to write a workflow transcript",
+    )
+    workflow_parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Skip writing workflow transcript output",
     )
     workflow_parser.set_defaults(handler=_handle_workflow)
 
@@ -111,4 +121,13 @@ def _handle_workflow(args: argparse.Namespace, orchestrator: TokBotOrchestrator)
         print(f"Output:\n{result.response}")
     print("=" * 40)
     print("Workflow completed.")
+
+    if not args.no_save:
+        transcript_path = write_transcript(
+            results,
+            orchestrator.settings,
+            output_path=args.output,
+            metadata={"initial_message": args.message},
+        )
+        print(f"Transcript saved to {transcript_path}")
     return 0
