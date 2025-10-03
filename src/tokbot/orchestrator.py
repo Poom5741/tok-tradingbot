@@ -22,3 +22,17 @@ class TokBotOrchestrator:
         agent = self.registry.get(target)
         response = agent.run(message)
         return AgentResult(agent_name=agent.name, request=message, response=response)
+
+    def run_sequence(
+        self,
+        agent_names: list[str] | tuple[str, ...],
+        message: str,
+    ) -> list[AgentResult]:
+        """Execute multiple agents sequentially, feeding each the prior response."""
+        results: list[AgentResult] = []
+        current = message
+        for name in agent_names:
+            result = self.run(agent_name=name, message=current)
+            results.append(result)
+            current = result.response
+        return results

@@ -34,6 +34,21 @@ def create_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(handler=_handle_run)
 
+    workflow_parser = subparsers.add_parser(
+        "workflow",
+        help="Run planner, builder, and auditor agents in sequence",
+    )
+    workflow_parser.add_argument(
+        "--agents",
+        help="Comma-separated list of agents to invoke in order (defaults to planner,builder,auditor)",
+    )
+    workflow_parser.add_argument(
+        "--message",
+        default="",
+        help="Initial message or objective to seed the workflow",
+    )
+    workflow_parser.set_defaults(handler=_handle_workflow)
+
     return parser
 
 
@@ -74,4 +89,26 @@ def _handle_run(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> i
     print(f"Agent: {result.agent_name}")
     print(f"Input: {result.request or '(no content)'}")
     print(f"Output: {result.response}")
+    return 0
+
+
+def _handle_workflow(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
+    """Execute a sequence of agents, passing each response to the next."""
+    if args.agents:
+        agent_sequence = [name.strip() for name in args.agents.split(",") if name.strip()]
+    else:
+        agent_sequence = ["planner", "builder", "auditor"]
+
+    if not agent_sequence:
+        print("No agents specified for workflow execution.")
+        return 0
+
+    results = orchestrator.run_sequence(agent_sequence, args.message)
+    for result in results:
+        print("=" * 40)
+        print(f"Agent: {result.agent_name}")
+        print(f"Input: {result.request or '(no content)'}")
+        print(f"Output:\n{result.response}")
+    print("=" * 40)
+    print("Workflow completed.")
     return 0

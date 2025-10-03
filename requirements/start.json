@@ -31,6 +31,8 @@
     "run_default": "python -m tokbot run --message 'Ping'",
     "run_echo": "python -m tokbot run echo --message 'Hello'",
     "run_upper": "python -m tokbot run uppercase --message 'Hello'",
+    "run_planner": "python -m tokbot run planner --message 'Outline feature'",
+    "workflow": "python -m tokbot workflow --message 'Ship feature'",
     "run_with_env": "python -m tokbot --env-file .env run --message 'Ping'"
   }
 }

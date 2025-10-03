@@ -10,9 +10,10 @@ def test_list_command_outputs_agent(capsys) -> None:
     captured = capsys.readouterr()
 
     assert exit_code == 0
-    assert "Available agents:" in captured.out
-    assert "echo" in captured.out.lower()
-    assert "uppercase" in captured.out.lower()
+    output = captured.out.lower()
+    assert "available agents:" in output
+    for name in ("echo", "uppercase", "planner", "builder", "auditor"):
+        assert name in output
 
 
 def test_run_command_returns_echo(capsys) -> None:
@@ -34,6 +35,17 @@ def test_run_command_uses_env_file_default(tmp_path: Path, capsys) -> None:
 
     assert exit_code == 0
     assert "Agent: echo" in captured.out
+
+
+def test_workflow_runs_default_sequence(capsys) -> None:
+    exit_code = run_cli(["workflow", "--message", "Ship feature X"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    output = captured.out
+    for name in ("planner", "builder", "auditor"):
+        assert f"Agent: {name}" in output
+    assert "Workflow completed." in output
 
 
 def test_custom_agent_module_loaded(tmp_path: Path, capsys, monkeypatch) -> None:

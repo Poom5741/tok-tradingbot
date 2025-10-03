@@ -15,6 +15,9 @@ DEFAULT_AGENT = "echo"
 DEFAULT_AGENT_MODULES: Tuple[str, ...] = (
     "tokbot.agents.echo",
     "tokbot.agents.uppercase",
+    "tokbot.agents.planner",
+    "tokbot.agents.builder",
+    "tokbot.agents.auditor",
 )
 
 
