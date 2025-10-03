@@ -1,0 +1,1 @@
+"""Trading integration placeholder."""
