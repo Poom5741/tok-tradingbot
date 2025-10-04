@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 from common import Settings
 from tokbot.orchestrator import MicrostructureBot
 from tokbot.integrations.uniswap import resolve_pair_address
+from trading.engine import TradingEngine, CastClient
 
 
 def _load_overrides(env_files: Iterable[str] | None) -> dict[str, str]:
@@ -69,6 +70,31 @@ class TelegramBot:
         # Microstructure bot instance used for /paper
         self.bot = MicrostructureBot(settings)
 
+        # Optional real trading engine using Foundry cast
+        try:
+            use_cast = (_lookup("USE_CAST", self.overrides) or "0") == "1"
+            live_enabled = (_lookup("TOKBOT_LIVE", self.overrides) or "0") == "1"
+            rpc_url = _lookup("RPC_URL", self.overrides)
+            chain_id = int(_lookup("CHAIN_ID", self.overrides) or "1")
+            bot_pk = _lookup("BOT_PK", self.overrides)
+            router_address = _lookup("ROUTER_ADDRESS", self.overrides)
+            token0 = _lookup("TOKEN0", self.overrides)
+            token1 = _lookup("TOKEN1", self.overrides)
+            pair_address = _lookup("PAIR_ADDRESS", self.overrides)
+            self.engine: Optional[TradingEngine] = None
+            if use_cast and live_enabled and rpc_url and bot_pk and router_address and token0 and token1 and pair_address:
+                client = CastClient(rpc_url=rpc_url, chain_id=chain_id, private_key=bot_pk, legacy_tx=True)
+                self.engine = TradingEngine(
+                    settings=settings,
+                    token0=token0,
+                    token1=token1,
+                    pair_address=pair_address,
+                    router_address=router_address,
+                    client=client,
+                )
+        except Exception:
+            self.engine = None
+
         # Periodic status updates
         try:
             interval_min_raw = _lookup("TELEGRAM_STATUS_INTERVAL_MIN", self.overrides) or "30"
@@ -121,7 +147,12 @@ class TelegramBot:
                 "/status\n"
                 "/kill\n"
                 "/resume\n"
-                "/summary",
+                "/summary\n"
+                "/trade buy <amount_wei>\n"
+                "/trade sell <amount_wei>\n"
+                "/balance\n"
+                "/gas\n"
+                "/topup <amount_wei>",
             )
             return
 
@@ -194,6 +225,83 @@ class TelegramBot:
                 self.pnl_history.extend(self.bot.pnl_ledger[len(self.pnl_history):])
             summary = "Paper Trading Outcomes:\n" + "\n".join(lines[:25])
             self._send(chat_id, summary)
+            return
+
+        if text.startswith("/trade"):
+            if not self.engine:
+                self._send(chat_id, "Live trading engine not available. Set USE_CAST=1 and TOKBOT_LIVE=1.")
+                return
+            parts = text.split()
+            if len(parts) < 3 or parts[1] not in {"buy", "sell"}:
+                self._send(chat_id, "Usage: /trade buy <amount_wei> | /trade sell <amount_wei>")
+                return
+            side = parts[1]
+            try:
+                amt = int(parts[2])
+            except Exception:
+                self._send(chat_id, "Amount must be integer in smallest units (wei).")
+                return
+            recipient = _lookup("BOT_ADDRESS", self.overrides) or ""
+            try:
+                if side == "buy":
+                    res = self.engine.buy_token1(amount_token0_in=amt, recipient=recipient)
+                else:
+                    res = self.engine.sell_token1(amount_token1_in=amt, recipient=recipient)
+                if not res.ok:
+                    self._send(chat_id, f"Trade failed: {res.error}")
+                    return
+                txh = res.tx_hash or ""
+                confirmed = self.engine.wait_confirmations(txh, confirmations=1, timeout_s=120)
+                self._send(chat_id, f"Trade {side} submitted. tx={txh} confirmed={confirmed}")
+            except Exception as exc:
+                self._send(chat_id, f"Trade error: {exc}")
+            return
+
+        if text.startswith("/balance"):
+            if not self.engine:
+                self._send(chat_id, "Live trading engine not available. Set USE_CAST=1 and TOKBOT_LIVE=1.")
+                return
+            # Query reserves for indicative price and confirm engine wiring
+            try:
+                r0, r1 = self.engine.get_reserves()
+                self._send(chat_id, f"Reserves: token0={r0} token1={r1}")
+            except Exception as exc:
+                self._send(chat_id, f"Balance/reserves error: {exc}")
+            return
+
+        if text.startswith("/gas"):
+            if not self.engine:
+                self._send(chat_id, "Live trading engine not available. Set USE_CAST=1 and TOKBOT_LIVE=1.")
+                return
+            recipient = _lookup("BOT_ADDRESS", self.overrides) or ""
+            try:
+                bal = self.engine.native_balance(recipient)
+                self._send(chat_id, f"Native balance: {bal} wei (min required: {self.engine.min_native_balance_wei} wei)")
+            except Exception as exc:
+                self._send(chat_id, f"Gas balance error: {exc}")
+            return
+
+        if text.startswith("/topup"):
+            if not self.engine:
+                self._send(chat_id, "Live trading engine not available. Set USE_CAST=1 and TOKBOT_LIVE=1.")
+                return
+            parts = text.split()
+            if len(parts) != 2:
+                self._send(chat_id, "Usage: /topup <amount_wei>")
+                return
+            try:
+                amount = int(parts[1])
+            except Exception:
+                self._send(chat_id, "Amount must be integer in wei")
+                return
+            recipient = _lookup("BOT_ADDRESS", self.overrides) or ""
+            # temporarily set top-up amount and attempt
+            prev = self.engine.topup_amount_wei
+            self.engine.topup_amount_wei = amount
+            ok2 = self.engine.ensure_gas(recipient)
+            # restore previous config
+            self.engine.topup_amount_wei = prev
+            self._send(chat_id, f"Top-up attempted amount={amount} wei ok={ok2}")
             return
 
         if text.startswith("/kill"):

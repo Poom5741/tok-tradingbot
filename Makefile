@@ -29,7 +29,7 @@ help:
 	@echo "  telegram      Start Telegram bot (uses ENV_FILE)"
 	@echo "  paper         Run paper-trading loop (set LOOPS)"
 	@echo "  paper-pair    Run paper with pair resolution (set TOKEN0,TOKEN1, DEX, FEE_BPS)"
-	@echo "  live          Run live mode (DRY-RUN; set LIVE_LOOPS)"
+	@echo "  live          Run live mode (DRY-RUN/REAL; set LIVE_LOOPS, TOKBOT_LIVE=1, USE_CAST=1)"
 	@echo "  lint          Run ruff check"
 	@echo "  format        Run ruff format"
 	@echo "  test          Run pytest"
@@ -65,7 +65,7 @@ paper-pair:
 	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot paper --loops $(LOOPS) --token0 $(TOKEN0) --token1 $(TOKEN1) --dex $(DEX) --fee-bps $(FEE_BPS)
 
 live:
-	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) live --loops $(LIVE_LOOPS)
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) live --loops $(LIVE_LOOPS) --use-cast
 
 lint:
 	$(RUFF) check src tests || true

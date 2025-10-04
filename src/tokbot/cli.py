@@ -65,6 +65,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Number of iterations (decisions) to run (<=0 for infinite)",
     )
     live_parser.add_argument(
+        "--use-cast",
+        action="store_true",
+        help="Use Foundry cast for transaction sending (requires TOKBOT_LIVE=1 in env)",
+    )
+    live_parser.add_argument(
         "--unsafe-live",
         action="store_true",
         help="DISABLE dry-run safeguards (not implemented yet)",
@@ -197,11 +202,41 @@ def _handle_live(args: argparse.Namespace, bot: MicrostructureBot) -> int:
 
     import time
     loops = getattr(args, "loops", 1)
-    print("Starting live mode (DRY-RUN)…")
+    use_cast_flag = getattr(args, "use_cast", False)
+    if use_cast_flag and not runner.live_enabled:
+        print("Warning: --use-cast requested but TOKBOT_LIVE=1 is not set. Running DRY-RUN.")
+    is_real = use_cast_flag and runner.live_enabled and runner.engine is not None
+    print("Starting live mode{}…".format(" (REAL)" if is_real else " (DRY-RUN)"))
     if loops <= 0:
         print("Running infinite loop. Press Ctrl+C to stop.")
         while True:
-            outcomes = runner.run_dry(loops=1, pair_address=pair_addr)
+            if is_real:
+                txh = runner.run_once_live()
+                print(f"Live step executed. tx={txh or 'none'}")
+            else:
+                outcomes = runner.run_dry(loops=1, pair_address=pair_addr)
+                for i, out in enumerate(outcomes, start=1):
+                    line = [f"[{i}] State: {out.state}"]
+                    if out.signal is not None:
+                        s = out.signal
+                        line.append(
+                            f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
+                        )
+                    if out.position is not None:
+                        line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
+                    if out.exited:
+                        line.append("Exited")
+                    print(" | ".join(line))
+            time.sleep(1.0)
+    else:
+        if is_real:
+            for _ in range(loops):
+                txh = runner.run_once_live()
+                print(f"Live step executed. tx={txh or 'none'}")
+                time.sleep(1.0)
+        else:
+            outcomes = runner.run_dry(loops=loops, pair_address=pair_addr)
+            print("Live Mode Outcomes (DRY-RUN):")
             for i, out in enumerate(outcomes, start=1):
                 line = [f"[{i}] State: {out.state}"]
                 if out.signal is not None:
@@ -214,23 +249,7 @@ def _handle_live(args: argparse.Namespace, bot: MicrostructureBot) -> int:
                 if out.exited:
                     line.append("Exited")
                 print(" | ".join(line))
-            time.sleep(1.0)
-    else:
-        outcomes = runner.run_dry(loops=loops, pair_address=pair_addr)
-        print("Live Mode Outcomes (DRY-RUN):")
-        for i, out in enumerate(outcomes, start=1):
-            line = [f"[{i}] State: {out.state}"]
-            if out.signal is not None:
-                s = out.signal
-                line.append(
-                    f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
-                )
-            if out.position is not None:
-                line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
-            if out.exited:
-                line.append("Exited")
-            print(" | ".join(line))
-        print("Note: On-chain execution is not implemented yet; this run performs no transactions.")
+            print("Note: On-chain execution is not implemented yet; this run performs no transactions.")
     return 0
 
 
