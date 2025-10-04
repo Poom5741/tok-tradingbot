@@ -14,7 +14,7 @@ DEX         ?= uniswap-v2
 FEE_BPS     ?= 3000
 
 .PHONY: help venv install install-dev install-prod env lint format test test-cov \
-        telegram paper paper-pair issue-read issue-comment
+        telegram paper paper-pair live issue-read issue-comment
 
 .DEFAULT_GOAL := help
 
@@ -27,6 +27,7 @@ help:
 	@echo "  telegram      Start Telegram bot (uses ENV_FILE)"
 	@echo "  paper         Run paper-trading loop (set LOOPS)"
 	@echo "  paper-pair    Run paper with pair resolution (set TOKEN0,TOKEN1, DEX, FEE_BPS)"
+	@echo "  live          Run live mode (DRY-RUN)"
 	@echo "  lint          Run ruff check"
 	@echo "  format        Run ruff format"
 	@echo "  test          Run pytest"
@@ -60,6 +61,9 @@ paper-pair:
 		echo "Set TOKEN0 and TOKEN1 to ERC20 addresses"; exit 1; \
 	fi
 	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot paper --loops $(LOOPS) --token0 $(TOKEN0) --token1 $(TOKEN1) --dex $(DEX) --fee-bps $(FEE_BPS)
+
+live:
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) live --loops $(LOOPS)
 
 lint:
 	$(RUFF) check src tests || true

@@ -10,6 +10,7 @@ from common import GitHubClient, GitHubError, Settings, configure_logging
 from .orchestrator import MicrostructureBot
 from telegram import TelegramBot
 from .integrations.uniswap import resolve_pair_address
+from .live import LiveRunner
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -55,6 +56,31 @@ def create_parser() -> argparse.ArgumentParser:
         help="Polling backoff interval in seconds when idle or on errors",
     )
     tele_parser.set_defaults(handler=_handle_telegram)
+
+    live_parser = subparsers.add_parser("live", help="Run live mode (dry-run by default)")
+    live_parser.add_argument(
+        "--loops",
+        type=int,
+        default=1,
+        help="Number of iterations (decisions) to run",
+    )
+    live_parser.add_argument(
+        "--unsafe-live",
+        action="store_true",
+        help="DISABLE dry-run safeguards (not implemented yet)",
+    )
+    live_parser.add_argument("--chain-id", type=int, default=1, help="Override chain ID")
+    live_parser.add_argument("--pair-address", help="Pair/pool address to trade (optional)")
+    live_parser.add_argument("--token0", help="ERC20 address for token0 (optional)")
+    live_parser.add_argument("--token1", help="ERC20 address for token1 (optional)")
+    live_parser.add_argument(
+        "--dex",
+        choices=["uniswap-v2", "uniswap-v3"],
+        default="uniswap-v2",
+        help="DEX used to resolve the pair/pool",
+    )
+    live_parser.add_argument("--fee-bps", type=int, default=None, help="Fee tier for v3 pools")
+    live_parser.set_defaults(handler=_handle_live)
 
     issue_parser = subparsers.add_parser(
         "issue",
@@ -146,6 +172,45 @@ def _handle_telegram(args: argparse.Namespace, bot: MicrostructureBot) -> int:
     telebot = TelegramBot(settings=bot.settings, env_files=getattr(args, "env_file", None))
     print("Starting Telegram bot service… Press Ctrl+C to stop.")
     telebot.run(poll_interval=getattr(args, "poll_interval", 1.0))
+    return 0
+
+
+def _handle_live(args: argparse.Namespace, bot: MicrostructureBot) -> int:
+    """Run live mode controller (currently DRY-RUN only)."""
+    runner = LiveRunner(settings=bot.settings, env_files=getattr(args, "env_file", None))
+    if getattr(args, "unsafe_live", False):
+        print("Warning: --unsafe-live requested, but on-chain execution is not implemented. Running dry-run.")
+    # Optionally resolve pair if token addresses provided
+    pair_addr = getattr(args, "pair_address", None)
+    if not pair_addr and getattr(args, "token0", None) and getattr(args, "token1", None):
+        pair_addr = resolve_pair_address(
+            token0=args.token0,
+            token1=args.token1,
+            dex=getattr(args, "dex", "uniswap-v2"),
+            chain_id=getattr(args, "chain_id", 1),
+            fee_bps=getattr(args, "fee_bps", None),
+        )
+        if pair_addr:
+            print(f"Resolved Pair ({getattr(args, 'dex', 'uniswap-v2')}, chain {getattr(args, 'chain_id', 1)}): {pair_addr}")
+        else:
+            print("Warning: Could not resolve pair/pool for provided tokens.")
+
+    print("Starting live mode (DRY-RUN)…")
+    outcomes = runner.run_dry(loops=getattr(args, "loops", 1), pair_address=pair_addr)
+    print("Live Mode Outcomes (DRY-RUN):")
+    for i, out in enumerate(outcomes, start=1):
+        line = [f"[{i}] State: {out.state}"]
+        if out.signal is not None:
+            s = out.signal
+            line.append(
+                f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
+            )
+        if out.position is not None:
+            line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
+        if out.exited:
+            line.append("Exited")
+        print(" | ".join(line))
+    print("Note: On-chain execution is not implemented yet; this run performs no transactions.")
     return 0
 
 
