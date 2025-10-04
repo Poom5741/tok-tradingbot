@@ -43,9 +43,13 @@ class TelegramBot:
 
     Commands:
     - /start, /help: Show help
+    - /whoami: Show your chat and user IDs
     - /status: Show bot status
     - /paper [loops]: Run paper-trading for N loops (default: 1)
     - /pair <token0> <token1> <dex> [fee_bps]: Resolve pair/pool address via Uniswap subgraphs
+    - /kill: Engage kill switch and clear any active position
+    - /resume: Disengage kill switch to allow trading
+    - /summary: Portfolio PnL summary for 1h/4h/1d (paper, simulated)
     """
 
     def __init__(self, settings: Settings, env_files: Iterable[str] | None = None):
@@ -64,6 +68,16 @@ class TelegramBot:
 
         # Microstructure bot instance used for /paper
         self.bot = MicrostructureBot(settings)
+
+        # Periodic status updates
+        try:
+            interval_min_raw = _lookup("TELEGRAM_STATUS_INTERVAL_MIN", self.overrides) or "30"
+            self.status_interval_s = max(60, int(float(interval_min_raw)) * 60)
+        except Exception:
+            self.status_interval_s = 30 * 60
+        self._next_status_ts = time.monotonic() + self.status_interval_s
+        # Track paper-trading PnL events (ts, pnl_usd)
+        self.pnl_history: list[tuple[float, float]] = []
 
     def _send(self, chat_id: int, text: str) -> None:
         try:
@@ -104,7 +118,10 @@ class TelegramBot:
                 "/whoami\n"
                 "/paper [loops]\n"
                 "/pair <token0> <token1> <dex> [fee_bps]\n"
-                "/status",
+                "/status\n"
+                "/kill\n"
+                "/resume\n"
+                "/summary",
             )
             return
 
@@ -114,7 +131,12 @@ class TelegramBot:
             return
 
         if text.startswith("/status"):
-            self._send(chat_id, f"tokBot ready. env={self.settings.environment}")
+            pos = self.bot.position
+            pos_txt = "none" if pos is None else f"size={pos.size:.2f} entry={pos.entry_price:.2f}"
+            self._send(
+                chat_id,
+                f"tokBot ready. env={self.settings.environment} state={self.bot.state} kill={self.bot.kill_switch} pos={pos_txt}",
+            )
             return
 
         if text.startswith("/whoami"):
@@ -166,8 +188,36 @@ class TelegramBot:
                 if out.exited:
                     segs.append("Exited")
                 lines.append(" | ".join(segs))
+            # Append any newly recorded PnL entries to bot-local history
+            if getattr(self.bot, "pnl_ledger", None):
+                # Take only new entries since last length
+                self.pnl_history.extend(self.bot.pnl_ledger[len(self.pnl_history):])
             summary = "Paper Trading Outcomes:\n" + "\n".join(lines[:25])
             self._send(chat_id, summary)
+            return
+
+        if text.startswith("/kill"):
+            self.bot.kill()
+            self._send(chat_id, "Kill switch engaged. Position cleared; trading paused.")
+            return
+
+        if text.startswith("/resume"):
+            self.bot.resume()
+            self._send(chat_id, "Kill switch disengaged. Trading resumed.")
+            return
+
+        if text.startswith("/summary"):
+            def window_sum(seconds: int) -> float:
+                now = time.time()
+                return sum(p for ts, p in self.pnl_history if now - ts <= seconds)
+
+            pnl_1h = window_sum(3600)
+            pnl_4h = window_sum(4 * 3600)
+            pnl_1d = window_sum(24 * 3600)
+            self._send(
+                chat_id,
+                f"PnL Summary (USD, paper):\n1h: {pnl_1h:+.2f}\n4h: {pnl_4h:+.2f}\n1d: {pnl_1d:+.2f}",
+            )
             return
 
         self._send(chat_id, "Unknown command. Use /help.")
@@ -187,6 +237,16 @@ class TelegramBot:
                         message = update.get("message") or update.get("channel_post")
                         if message:
                             self._handle(message)
+                    # After handling incoming updates, send periodic status to admin
+                    now_mono = time.monotonic()
+                    if self.admin_id is not None and now_mono >= self._next_status_ts:
+                        pos = self.bot.position
+                        pos_txt = "none" if pos is None else f"size={pos.size:.2f} entry={pos.entry_price:.2f}"
+                        self._send(
+                            self.admin_id,
+                            f"[Periodic] env={self.settings.environment} state={self.bot.state} kill={self.bot.kill_switch} pos={pos_txt}",
+                        )
+                        self._next_status_ts = now_mono + self.status_interval_s
                 else:
                     time.sleep(poll_interval)
             except Exception:

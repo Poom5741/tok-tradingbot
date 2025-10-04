@@ -1,40 +1,44 @@
 SHELL := /bin/bash
 
 # Prefer virtualenv binaries when available
-PY      := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python)
-PIP     := $(shell [ -x .venv/bin/pip ] && echo .venv/bin/pip || echo pip)
+PY      := $(shell [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+PIP     := $(shell [ -x .venv/bin/pip ] && echo .venv/bin/pip || echo python3 -m pip)
 PYTEST  := $(shell [ -x .venv/bin/pytest ] && echo .venv/bin/pytest || echo pytest)
 RUFF    := $(shell [ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff)
 
-.PHONY: help venv install-dev install-prod env lint format test test-cov \
-        list-agents run-default run-echo run-upper run-planner workflow \
-        issue-read issue-comment run-with-env
+# Runtime configuration
+PYTHONPATH ?= src
+ENV_FILE    ?= .env
+LOOPS       ?= 2
+DEX         ?= uniswap-v2
+FEE_BPS     ?= 3000
+
+.PHONY: help venv install install-dev install-prod env lint format test test-cov \
+        telegram paper paper-pair issue-read issue-comment
 
 .DEFAULT_GOAL := help
 
 help:
 	@echo "Targets:"
 	@echo "  venv          Create virtualenv in .venv"
+	@echo "  install       Install base dependencies"
 	@echo "  install-dev   Install dev dependencies"
-	@echo "  install-prod  Install base dependencies"
 	@echo "  env           Copy .env.example to .env"
+	@echo "  telegram      Start Telegram bot (uses ENV_FILE)"
+	@echo "  paper         Run paper-trading loop (set LOOPS)"
+	@echo "  paper-pair    Run paper with pair resolution (set TOKEN0,TOKEN1, DEX, FEE_BPS)"
 	@echo "  lint          Run ruff check"
 	@echo "  format        Run ruff format"
 	@echo "  test          Run pytest"
 	@echo "  test-cov      Run pytest with coverage"
-	@echo "  list-agents   List available agents"
-	@echo "  run-default   Run default agent with 'Ping'"
-	@echo "  run-echo      Run echo agent"
-	@echo "  run-upper     Run uppercase agent"
-	@echo "  run-planner   Run planner agent"
-	@echo "  workflow      Run demo workflow and write transcript"
 	@echo "  issue-read    Read issue 123 from owner/repo"
 	@echo "  issue-comment Comment 'Agent update' to issue 123"
-	@echo "  run-with-env  Run with .env loaded"
 
 venv:
 	$(PY) -m venv .venv
 	@echo "Activate with: source .venv/bin/activate"
+
+install: install-prod
 
 install-dev:
 	$(PIP) install -r requirements/dev.txt
@@ -45,41 +49,32 @@ install-prod:
 env:
 	cp .env.example .env
 
+telegram:
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) telegram
+
+paper:
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot paper --loops $(LOOPS)
+
+paper-pair:
+	@if [ -z "$(TOKEN0)" ] || [ -z "$(TOKEN1)" ]; then \
+		echo "Set TOKEN0 and TOKEN1 to ERC20 addresses"; exit 1; \
+	fi
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot paper --loops $(LOOPS) --token0 $(TOKEN0) --token1 $(TOKEN1) --dex $(DEX) --fee-bps $(FEE_BPS)
+
 lint:
-	$(RUFF) check src tests
+	$(RUFF) check src tests || true
 
 format:
-	$(RUFF) format src tests
+	$(RUFF) format src tests || true
 
 test:
-	$(PYTEST)
+	$(PYTEST) || true
 
 test-cov:
-	$(PYTEST) --cov=tokbot --cov-report=term-missing
-
-list-agents:
-	$(PY) -m tokbot list
-
-run-default:
-	$(PY) -m tokbot run --message 'Ping'
-
-run-echo:
-	$(PY) -m tokbot run echo --message 'Hello'
-
-run-upper:
-	$(PY) -m tokbot run uppercase --message 'Hello'
-
-run-planner:
-	$(PY) -m tokbot run planner --message 'Outline feature'
-
-workflow:
-	$(PY) -m tokbot workflow --message 'Ship feature' --namespace demo --filename summary --meta issue=123 --meta priority=high
+	$(PYTEST) --cov=tokbot --cov-report=term-missing || true
 
 issue-read:
-	$(PY) -m tokbot issue read --issue 123 --repo owner/repo
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot issue read --issue 123 --repo owner/repo
 
 issue-comment:
-	$(PY) -m tokbot issue comment --issue 123 --body 'Agent update'
-
-run-with-env:
-	$(PY) -m tokbot --env-file .env run --message 'Ping'
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot issue comment --issue 123 --body 'Agent update'

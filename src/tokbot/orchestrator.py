@@ -50,6 +50,9 @@ class MicrostructureBot:
         self.settings = settings
         self.state = BotState.IDLE
         self.position: Optional[Position] = None
+        self.kill_switch: bool = False
+        # Simple in-memory PnL ledger for paper outcomes: [(ts, pnl_usd)]
+        self.pnl_ledger: list[tuple[float, float]] = []
 
     def ready(self) -> bool:
         return True
@@ -98,6 +101,15 @@ class MicrostructureBot:
     def exit(self) -> None:
         self.position = None
 
+    def kill(self) -> None:
+        """Engage kill switch and clear any active position."""
+        self.kill_switch = True
+        self.exit()
+
+    def resume(self) -> None:
+        """Disengage kill switch to allow trading again."""
+        self.kill_switch = False
+
     def run_paper(self, *, loops: int = 1) -> list[BotOutcome]:
         outcomes: list[BotOutcome] = []
         for _ in range(loops):
@@ -112,7 +124,8 @@ class MicrostructureBot:
             self.state = BotState.SCORE
             outcomes.append(BotOutcome(state=BotState.SCORE, signal=sig))
 
-            if self.strong_reaction(sig):
+            # Respect kill switch: never enter while engaged
+            if self.strong_reaction(sig) and not self.kill_switch:
                 self.state = BotState.ENTER
                 pos = self.enter(self.size_from(sig), price=100.0)
                 outcomes.append(BotOutcome(state=BotState.ENTER, signal=sig, position=pos))
@@ -123,6 +136,11 @@ class MicrostructureBot:
                 if self.exit_conditions(sig):
                     self.state = BotState.EXIT
                     self.exit()
+                    # Crude simulated PnL in USD from signal deviations
+                    # Treat dev_bps as markout and size as $ exposure at entry_price=100
+                    markout_bps = sig.dev_bps + (sig.ofi * 5.0)
+                    pnl_usd = (pos.size * 100.0) * (markout_bps / 10000.0)
+                    self.pnl_ledger.append((__import__("time").time(), pnl_usd))
                     outcomes.append(BotOutcome(state=BotState.EXIT, signal=sig, exited=True))
             else:
                 # No enter, remain idle
