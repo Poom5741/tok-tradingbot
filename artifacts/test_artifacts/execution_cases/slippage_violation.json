@@ -1,0 +1,10 @@
+{
+  "name": "slippage_violation",
+  "swap_allowed": false,
+  "reason": "slippage_cap",
+  "expect": {
+    "swap_allowed": false,
+    "reason": "slippage_cap"
+  },
+  "pass": true
+}

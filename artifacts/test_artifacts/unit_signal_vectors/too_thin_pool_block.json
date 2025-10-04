@@ -1,0 +1,12 @@
+{
+  "name": "too_thin_pool_block",
+  "result": {
+    "name": "too_thin_pool_block",
+    "enter": false
+  },
+  "expect": {
+    "enter": false,
+    "skip_reason": "SE_above_max"
+  },
+  "pass": true
+}

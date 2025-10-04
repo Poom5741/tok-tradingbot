@@ -1,0 +1,12 @@
+{
+  "name": "daily_loss_trigger",
+  "result": {
+    "trading": "OFF",
+    "reason": "DAILY_LOSS"
+  },
+  "expect": {
+    "trading": "OFF",
+    "reason": "DAILY_LOSS"
+  },
+  "pass": true
+}

@@ -1,0 +1,12 @@
+{
+  "name": "daily_gas_trigger",
+  "result": {
+    "probes": "OFF",
+    "entries": "OFF"
+  },
+  "expect": {
+    "probes": "OFF",
+    "entries": "OFF"
+  },
+  "pass": true
+}

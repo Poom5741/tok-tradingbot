@@ -1,35 +1,30 @@
-"""Simple configuration helpers for tokBot."""
+"""Configuration helpers for the microstructure bot (paper trading)."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional
 
 from dotenv import dotenv_values
 
 
 DEFAULT_ENVIRONMENT = "development"
-DEFAULT_AGENT = "echo"
-DEFAULT_AGENT_MODULES: Tuple[str, ...] = (
-    "tokbot.agents.echo",
-    "tokbot.agents.uppercase",
-    "tokbot.agents.planner",
-    "tokbot.agents.builder",
-    "tokbot.agents.auditor",
-)
-DEFAULT_TRANSCRIPTS_DIR = Path("artifacts/transcripts")
+DEFAULT_FT_MIN = 1.8
+DEFAULT_IP_MIN_BPS = 5.0
+DEFAULT_SE_MIN = 0.1
+DEFAULT_SE_MAX = 2.0
 
 
-@dataclass(slots=True)
+@dataclass
 class Settings:
-    """Container for environment-derived configuration."""
+    """Container for environment-derived configuration for the bot."""
 
     environment: str = DEFAULT_ENVIRONMENT
-    default_agent: str = DEFAULT_AGENT
-    agent_modules: Tuple[str, ...] = DEFAULT_AGENT_MODULES
-    transcripts_dir: Path = DEFAULT_TRANSCRIPTS_DIR
+    ft_min: float = DEFAULT_FT_MIN
+    ip_min_bps: float = DEFAULT_IP_MIN_BPS
+    se_min: float = DEFAULT_SE_MIN
+    se_max: float = DEFAULT_SE_MAX
     github_repo: Optional[str] = None
 
     @classmethod
@@ -39,8 +34,8 @@ class Settings:
         env_overrides: dict[str, str] = {}
         if env_files:
             for candidate in env_files:
-                candidate_path = Path(candidate)
-                if candidate_path.is_file():
+                candidate_path = os.path.abspath(candidate)
+                if os.path.isfile(candidate_path):
                     values = {
                         key: value
                         for key, value in dotenv_values(candidate_path).items()
@@ -64,28 +59,11 @@ class Settings:
             stripped = value.strip()
             return stripped or None
 
-        raw_modules = get_override("TOKBOT_AGENT_MODULES")
-        extra_modules: Tuple[str, ...] = ()
-        if raw_modules:
-            extra_modules = tuple(
-                part.strip()
-                for part in raw_modules.split(",")
-                if part.strip()
-            )
-
-        deduped_modules = dict.fromkeys(DEFAULT_AGENT_MODULES + extra_modules)
-
-        transcripts_dir_raw = get_override("TOKBOT_TRANSCRIPTS_DIR")
-        transcripts_dir = (
-            Path(transcripts_dir_raw)
-            if transcripts_dir_raw
-            else DEFAULT_TRANSCRIPTS_DIR
-        )
-
         return cls(
             environment=lookup("TOKBOT_ENV", DEFAULT_ENVIRONMENT),
-            default_agent=lookup("TOKBOT_DEFAULT_AGENT", DEFAULT_AGENT),
-            agent_modules=tuple(deduped_modules.keys()),
-            transcripts_dir=transcripts_dir,
+            ft_min=float(lookup("TOKBOT_FT_MIN", str(DEFAULT_FT_MIN))),
+            ip_min_bps=float(lookup("TOKBOT_IP_MIN_BPS", str(DEFAULT_IP_MIN_BPS))),
+            se_min=float(lookup("TOKBOT_SE_MIN", str(DEFAULT_SE_MIN))),
+            se_max=float(lookup("TOKBOT_SE_MAX", str(DEFAULT_SE_MAX))),
             github_repo=lookup_optional("TOKBOT_GITHUB_REPO"),
         )

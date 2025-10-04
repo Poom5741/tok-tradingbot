@@ -1,0 +1,12 @@
+{
+  "name": "ambiguous_mempool_skip",
+  "result": {
+    "name": "ambiguous_mempool_skip",
+    "enter": true
+  },
+  "expect": {
+    "enter": false,
+    "skip_reason": "ambiguous_mempool"
+  },
+  "pass": false
+}

@@ -1,0 +1,9 @@
+{
+  "name": "block_gap_enforced",
+  "cooldown_factor": 2.0,
+  "allow_probe": false,
+  "expect": {
+    "allow_probe": false
+  },
+  "pass": true
+}

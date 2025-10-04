@@ -1,0 +1,8 @@
+{
+  "name": "private_relay_policy",
+  "entry_allowed": true,
+  "expect": {
+    "entry_allowed": true
+  },
+  "pass": true
+}

@@ -1,0 +1,8 @@
+{
+  "name": "slippage_guard",
+  "swap_allowed": true,
+  "expect": {
+    "swap_allowed": true
+  },
+  "pass": true
+}

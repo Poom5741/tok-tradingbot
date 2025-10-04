@@ -1,0 +1,12 @@
+{
+  "name": "tp_exit",
+  "result": {
+    "name": "tp_exit",
+    "exit": true
+  },
+  "expect": {
+    "exit": true,
+    "exit_reason": "TP_hit"
+  },
+  "pass": true
+}

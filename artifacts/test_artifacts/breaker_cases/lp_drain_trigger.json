@@ -1,0 +1,12 @@
+{
+  "name": "lp_drain_trigger",
+  "result": {
+    "trading": "OFF",
+    "reason": "LP_DRAIN"
+  },
+  "expect": {
+    "trading": "OFF",
+    "reason": "LP_DRAIN"
+  },
+  "pass": true
+}

@@ -1,0 +1,269 @@
+{
+  "goal": "Validate that the single-pair on-chain microstructure trading bot behaves exactly as designed: signals computed correctly, decision rules enforced, cadence prevents gas drain, execution is MEV-aware with proper slippage limits, and circuit breakers halt trading under defined conditions.",
+  "mode": "VALIDATION_ONLY",
+  "inputs": {
+    "config_file": "config.yaml",
+    "env_file": ".env",
+    "runtime_binaries": ["python", "docker", "docker compose", "node"],
+    "services": ["strategy", "mempool", "bot", "redis", "prometheus", "grafana"]
+  },
+  "schema_checks": {
+    "config.yaml": {
+      "required": [
+        "pair.fee_bps",
+        "probe.notional_usd",
+        "probe.w1_blocks",
+        "probe.w2_blocks",
+        "signals.ft_threshold",
+        "signals.ip_bps_threshold",
+        "signals.se_bps_per_$100_min",
+        "signals.se_bps_per_$100_max",
+        "signals.tp_bps",
+        "signals.sl_bps",
+        "signals.time_stop_s",
+        "liquidity.ld_drain_exit_pct",
+        "mempool.ambig_ratio_stop",
+        "risk.max_slippage_bps",
+        "risk.per_trade_notional_usd.min",
+        "risk.per_trade_notional_usd.max",
+        "scheduling.max_trades_per_hour",
+        "ops_guards.gas_cap_gwei",
+        "ops_guards.daily_gas_budget_usd",
+        "ops_guards.daily_loss_cap_usd",
+        "ops_guards.drawdown_cap_pct"
+      ],
+      "constraints": [
+        { "assert": "pair.fee_bps in [5, 10, 25, 50, 1000]", "on_fail": "error:invalid_fee_bps" },
+        { "assert": "probe.notional_usd > 0", "on_fail": "error:probe_size_zero" },
+        { "assert": "probe.w1_blocks >= 1 && probe.w2_blocks >= probe.w1_blocks", "on_fail": "error:window_order" },
+        { "assert": "signals.ft_threshold > 0 && signals.ip_bps_threshold > 0", "on_fail": "error:signal_thresholds" },
+        { "assert": "signals.se_bps_per_$100_min < signals.se_bps_per_$100_max", "on_fail": "error:se_range" },
+        { "assert": "risk.per_trade_notional_usd.min <= risk.per_trade_notional_usd.max", "on_fail": "error:size_range" },
+        { "assert": "scheduling.max_trades_per_hour >= 1", "on_fail": "error:trade_cap" },
+        { "assert": "ops_guards.gas_cap_gwei > 0 && ops_guards.daily_gas_budget_usd > 0", "on_fail": "error:ops_guards" }
+      ]
+    },
+    ".env": {
+      "required": ["RPC_URL", "CHAIN_ID", "PAIR_ADDRESS", "TOKEN0", "TOKEN1", "BOT_PK", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ADMIN_ID"],
+      "constraints": [
+        { "assert": "RPC_URL startswith('ws') or startswith('wss')", "on_fail": "error:rpc_not_websocket" },
+        { "assert": "len(BOT_PK) >= 66", "on_fail": "error:pk_length" },
+        { "assert": "int(CHAIN_ID) > 0", "on_fail": "error:chain_id" }
+      ]
+    }
+  },
+  "runtime_preflight": [
+    { "id": "bin/docker", "assert": "docker --version exits 0" },
+    { "id": "bin/compose", "assert": "docker compose version exits 0" },
+    { "id": "bin/node", "assert": "node -v exits 0" },
+    { "id": "svc/redis", "assert": "docker compose up -d redis && redis-cli -h redis ping == PONG" }
+  ],
+  "signal_definitions": {
+    "FT": "Follow-Through = (same-direction notional within W1 − opposite-direction notional within W1) / median_notional_last_N",
+    "IP": "Impact Persistence (bps) = 1e4 * ((mid_W1_end − mid_pre_probe) / mid_pre_probe) * dir_sign",
+    "SE": "Slippage Elasticity = |(mid_post − mid_pre)/mid_pre| / (probe_notional_usd/100)",
+    "OFI": "Order-Flow Imbalance = sum(sign * notional / median_notional) over last N swaps",
+    "LD": "Liquidity Delta = delta of virtual liquidity from Sync/Mint/Burn over last K blocks",
+    "DEV": "Spot–TWAP deviation (bps) = 1e4 * (spot_mid − TWAP_h) / TWAP_h",
+    "PBP_PSP": "Pending buy/sell pressure = gas-weighted sum of pending swaps touching the pair path"
+  },
+  "logic_guards": [
+    {
+      "id": "enter_rule",
+      "description": "Permit entry only when all conditions are satisfied.",
+      "assert_all": [
+        "FT > signals.ft_threshold",
+        "IP > signals.ip_bps_threshold",
+        "SE >= signals.se_bps_per_$100_min && SE <= signals.se_bps_per_$100_max",
+        "LD <= 0",
+        "PBP > PSP"
+      ],
+      "on_fail": "deny_entry"
+    },
+    {
+      "id": "exit_rules",
+      "description": "Exit if TP/SL/time-stop/OFI flip/LP add.",
+      "assert_any": [
+        "markout_bps >= signals.tp_bps",
+        "markout_bps <= -signals.sl_bps",
+        "elapsed_s >= signals.time_stop_s",
+        "OFI <= -signals.ofi_norm_threshold",
+        "LD > 0"
+      ],
+      "on_true": "force_exit_private_relay"
+    },
+    {
+      "id": "mempool_ambiguity",
+      "description": "Skip probing when pending flow is ambiguous.",
+      "assert": "(max(PBP,PSP) / min(PBP,PSP)) >= mempool.ambig_ratio_stop",
+      "on_fail": "skip_probe"
+    },
+    {
+      "id": "cadence_controller",
+      "description": "Adaptive cooldown expands in quiet markets, high gas, or weak recent signals.",
+      "assert_all": [
+        "if gas_gwei > ops_guards.gas_cap_gwei then cooldown_factor >= 2.0",
+        "if swaps_10m < scheduling.quiet_mode_threshold_min then cooldown_factor >= 2.0",
+        "if weak_signals_ratio >= 0.66 over last 3 probes then cooldown_factor >= 1.5",
+        "never probe in consecutive blocks (enforce min_block_gap)"
+      ],
+      "on_fail": "increase_cooldown_and_log"
+    },
+    {
+      "id": "slippage_cap",
+      "description": "All swaps respect max slippage.",
+      "assert": "effective_slippage_bps <= risk.max_slippage_bps",
+      "on_fail": "cancel_tx_and_log"
+    },
+    {
+      "id": "private_relay_policy",
+      "description": "Prefer private relay/bundles; if unavailable, tighten slippage.",
+      "assert_any": [
+        "route == 'private_relay'",
+        "(route == 'public' && risk.max_slippage_bps <= 10)"
+      ],
+      "on_fail": "deny_entry"
+    }
+  ],
+  "circuit_breakers": [
+    {
+      "id": "lp_drain",
+      "trigger": "lp_drain_pct_2blocks >= liquidity.ld_drain_exit_pct",
+      "action": "exit_all; set trading=OFF",
+      "alert": "Telegram: LP_DRAIN with pct and block refs"
+    },
+    {
+      "id": "daily_gas_budget",
+      "trigger": "daily_gas_usd >= ops_guards.daily_gas_budget_usd",
+      "action": "disable probes and entries; observe only",
+      "alert": "Telegram: GAS_BUDGET_HIT"
+    },
+    {
+      "id": "daily_loss_cap",
+      "trigger": "daily_pnl_usd <= -ops_guards.daily_loss_cap_usd",
+      "action": "exit_all; trading=OFF",
+      "alert": "Telegram: DAILY_LOSS_CAP"
+    },
+    {
+      "id": "drawdown_cap",
+      "trigger": "session_drawdown_pct <= -ops_guards.drawdown_cap_pct",
+      "action": "exit_all; trading=OFF",
+      "alert": "Telegram: DRAWDOWN_CAP"
+    },
+    {
+      "id": "mev_suspicion",
+      "trigger": "same_block_backrun_pattern_detected == true",
+      "action": "halve_sizes_next_N=10; enforce private relay only; lower max_slippage_bps by 50%",
+      "alert": "Telegram: MEV_SUSPECT"
+    }
+  ],
+  "simulators": {
+    "unit_signal_vectors": [
+      {
+        "name": "strong_momentum_entry",
+        "input": { "FT": 2.2, "IP": 7, "SE": 1.2, "LD": -0.5, "PBP": 300, "PSP": 100, "OFI": 2.5, "DEV": 6 },
+        "expect": { "enter": true, "size_range_usd": [100, 1500] }
+      },
+      {
+        "name": "ambiguous_mempool_skip",
+        "input": { "FT": 2.0, "IP": 6, "SE": 1.0, "LD": -0.1, "PBP": 110, "PSP": 100, "OFI": 1.0, "DEV": 2 },
+        "expect": { "enter": false, "skip_reason": "ambiguous_mempool" }
+      },
+      {
+        "name": "too_thin_pool_block",
+        "input": { "FT": 2.5, "IP": 10, "SE": 9.0, "LD": -0.2, "PBP": 400, "PSP": 90, "OFI": 3.0, "DEV": 5 },
+        "expect": { "enter": false, "skip_reason": "SE_above_max" }
+      },
+      {
+        "name": "lp_add_exit",
+        "position_open": true,
+        "input": { "markout_bps": 4, "elapsed_s": 30, "LD": 0.3, "OFI": 0.5 },
+        "expect": { "exit": true, "exit_reason": "LD_positive" }
+      },
+      {
+        "name": "tp_exit",
+        "position_open": true,
+        "input": { "markout_bps": 20, "elapsed_s": 25, "LD": -0.2, "OFI": 2.0 },
+        "expect": { "exit": true, "exit_reason": "TP_hit" }
+      }
+    ],
+    "cadence_cases": [
+      {
+        "name": "high_gas_backoff",
+        "context": { "gas_gwei": "2 * {{ops_guards.gas_cap_gwei}}", "swaps_10m": 20, "weak_signals_ratio": 0.0 },
+        "expect": { "cooldown_factor_min": 2.0 }
+      },
+      {
+        "name": "quiet_market_backoff",
+        "context": { "gas_gwei": "{{ops_guards.gas_cap_gwei}}", "swaps_10m": 2, "weak_signals_ratio": 0.0 },
+        "expect": { "cooldown_factor_min": 2.0 }
+      },
+      {
+        "name": "weak_signals_backoff",
+        "context": { "gas_gwei": "{{ops_guards.gas_cap_gwei}}", "swaps_10m": 20, "weak_signals_ratio": 0.66 },
+        "expect": { "cooldown_factor_min": 1.5 }
+      },
+      {
+        "name": "block_gap_enforced",
+        "context": { "blocks_since_last_probe": 0 },
+        "expect": { "allow_probe": false }
+      }
+    ],
+    "breaker_cases": [
+      { "name": "lp_drain_trigger", "state": { "lp_drain_pct_2blocks": 3.1 }, "expect": { "trading": "OFF", "reason": "LP_DRAIN" } },
+      { "name": "daily_gas_trigger", "state": { "daily_gas_usd": "{{ops_guards.daily_gas_budget_usd}}" }, "expect": { "probes": "OFF", "entries": "OFF" } },
+      { "name": "daily_loss_trigger", "state": { "daily_pnl_usd": "-1 * {{ops_guards.daily_loss_cap_usd}}" }, "expect": { "trading": "OFF", "reason": "DAILY_LOSS" } }
+    ],
+    "execution_cases": [
+      {
+        "name": "slippage_guard",
+        "swap": { "expected_slippage_bps": 8, "max_slippage_bps": "{{risk.max_slippage_bps}}" },
+        "expect": { "swap_allowed": true }
+      },
+      {
+        "name": "slippage_violation",
+        "swap": { "expected_slippage_bps": 15, "max_slippage_bps": 10 },
+        "expect": { "swap_allowed": false, "reason": "slippage_cap" }
+      },
+      {
+        "name": "private_relay_policy",
+        "route": "public",
+        "risk": { "max_slippage_bps": 10 },
+        "expect": { "entry_allowed": true }
+      }
+    ]
+  },
+  "observability_assertions": [
+    { "id": "metrics_export", "assert": "GET strategy:/metrics returns 200 and includes bot_pnl_usd_total, bot_daily_gas_usd, ping_count, entry_count, breaker_events" },
+    { "id": "signal_logging", "assert": "Each probe/entry/exit log includes FT, IP, SE, OFI, LD, DEV, PBP, PSP snapshot" },
+    { "id": "telegram_alerts", "assert": "Circuit breaker triggers send Telegram messages with reason and numbers" }
+  ],
+  "acceptance_criteria": [
+    "No entry occurs if any enter_rule predicate fails.",
+    "At least one exit condition ends every open position within configured bounds (TP/SL/time-stop/LD>0/OFI flip).",
+    "Cadence controller prevents consecutive-block probes and respects gas/quiet/weak-signal backoff.",
+    "All swaps that execute respect max slippage limits; violating swaps are cancelled.",
+    "Circuit breakers deterministically disable trading when their thresholds are crossed.",
+    "Metrics and logs are sufficient to reconstruct every decision."
+  ],
+  "failure_policies": {
+    "on_validation_fail": "block_trade, emit_telemetry, write_reason, suggest_config_patch",
+    "on_missing_metric": "raise_error_and_stop",
+    "on_env_misconfig": "halt_boot_with_instruction"
+  },
+  "deliverables": [
+    "validation_report.md (per check PASS/FAIL with evidence)",
+    "patched_config.yaml (optional suggestions if thresholds misaligned)",
+    "test_artifacts/* (logs of each simulator case)"
+  ],
+  "runbook": {
+    "commands": [
+      "docker compose up -d redis",
+      "docker compose up --build strategy mempool bot -d",
+      "curl http://localhost:9100/metrics",
+      "invoke validator (your harness) with this JSON to run schema_checks, simulators, and assertions"
+    ],
+    "teardown": ["docker compose down -v"]
+  },
+  "notes": "Replace templated references like {{risk.max_slippage_bps}} with the actual value from config.yaml before running validations."
+}

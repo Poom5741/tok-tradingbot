@@ -1,0 +1,32 @@
+pair:
+  fee_bps: 5
+probe:
+  notional_usd: 100
+  w1_blocks: 5
+  w2_blocks: 10
+signals:
+  ft_threshold: 1.8
+  ip_bps_threshold: 5.0
+  se_bps_per_$100_min: 0.1
+  se_bps_per_$100_max: 2.0
+  tp_bps: 20
+  sl_bps: 15
+  time_stop_s: 60
+  ofi_norm_threshold: 1.0
+liquidity:
+  ld_drain_exit_pct: 0.25
+mempool:
+  ambig_ratio_stop: 1.5
+risk:
+  max_slippage_bps: 50
+  per_trade_notional_usd:
+    min: 50
+    max: 500
+scheduling:
+  max_trades_per_hour: 12
+  quiet_mode_threshold_min: 5
+ops_guards:
+  gas_cap_gwei: 20
+  daily_gas_budget_usd: 50
+  daily_loss_cap_usd: 100
+  drawdown_cap_pct: 10

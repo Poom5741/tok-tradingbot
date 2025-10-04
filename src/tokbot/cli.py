@@ -1,20 +1,18 @@
-"""Command-line interface for tokBot."""
+"""Command-line interface for the microstructure bot (paper trading)."""
 
 from __future__ import annotations
 
 import argparse
-from typing import Sequence
+from typing import Sequence, Optional
+import requests
 
 from common import GitHubClient, GitHubError, Settings, configure_logging
-
-from .bootstrap import build_registry
-from .orchestrator import TokBotOrchestrator
-from .transcript import write_transcript
+from .orchestrator import MicrostructureBot
 
 
 def create_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser."""
-    parser = argparse.ArgumentParser(description="tokBot automation agent controller")
+    parser = argparse.ArgumentParser(description="tokBot microstructure bot controller")
     parser.add_argument(
         "--env-file",
         action="append",
@@ -23,59 +21,33 @@ def create_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    list_parser = subparsers.add_parser("list", help="List available agents")
-    list_parser.set_defaults(handler=_handle_list)
-
-    run_parser = subparsers.add_parser("run", help="Execute an agent")
-    run_parser.add_argument("agent", nargs="?", help="Agent name to execute")
-    run_parser.add_argument(
-        "--message",
-        default="",
-        help="Message payload to pass to the agent",
+    paper_parser = subparsers.add_parser("paper", help="Run paper-trading loop")
+    paper_parser.add_argument(
+        "--loops",
+        type=int,
+        default=1,
+        help="Number of paper-trading iterations to run",
     )
-    run_parser.set_defaults(handler=_handle_run)
-
-    workflow_parser = subparsers.add_parser(
-        "workflow",
-        help="Run planner, builder, and auditor agents in sequence",
+    paper_parser.add_argument("--token0", help="ERC20 address for token0 (checksummed)")
+    paper_parser.add_argument("--token1", help="ERC20 address for token1 (checksummed)")
+    paper_parser.add_argument(
+        "--dex",
+        choices=["uniswap-v2", "uniswap-v3"],
+        default="uniswap-v2",
+        help="DEX used to resolve the pair/pool",
     )
-    workflow_parser.add_argument(
-        "--agents",
-        help="Comma-separated list of agents to invoke in order (defaults to planner,builder,auditor)",
+    paper_parser.add_argument("--chain-id", type=int, default=1, help="Chain ID for resolution (default: 1)")
+    paper_parser.add_argument(
+        "--fee-bps",
+        type=int,
+        default=None,
+        help="Fee tier (bps) for Uniswap v3 pools (e.g., 500/3000/10000)",
     )
-    workflow_parser.add_argument(
-        "--message",
-        default="",
-        help="Initial message or objective to seed the workflow",
-    )
-    workflow_parser.add_argument(
-        "--output",
-        help="Optional file path to write a workflow transcript",
-    )
-    workflow_parser.add_argument(
-        "--namespace",
-        help="Optional sub-directory name under the transcripts directory",
-    )
-    workflow_parser.add_argument(
-        "--filename",
-        help="Optional custom transcript file name (appends .json if missing)",
-    )
-    workflow_parser.add_argument(
-        "--meta",
-        action="append",
-        metavar="KEY=VALUE",
-        help="Attach additional metadata entries to the transcript (repeatable)",
-    )
-    workflow_parser.add_argument(
-        "--no-save",
-        action="store_true",
-        help="Skip writing workflow transcript output",
-    )
-    workflow_parser.set_defaults(handler=_handle_workflow)
+    paper_parser.set_defaults(handler=_handle_paper)
 
     issue_parser = subparsers.add_parser(
         "issue",
-        help="Interact with GitHub issues for agent memory",
+        help="Interact with GitHub issues for bot notes",
     )
     issue_subparsers = issue_parser.add_subparsers(dest="issue_command", required=True)
 
@@ -116,86 +88,107 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
 
     configure_logging()
     settings = Settings.from_env(env_files=args.env_file)
-    orchestrator = TokBotOrchestrator(
-        registry=build_registry(settings.agent_modules),
-        settings=settings,
-    )
+    bot = MicrostructureBot(settings)
 
     handler = getattr(args, "handler", None)
     if handler is None:
         parser.error("No handler configured for the provided command")
-    return handler(args, orchestrator)
+    return handler(args, bot)
 
 
-def _handle_list(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
-    """List all registered agents."""
-    _ = args  # unused but kept for signature parity
-    agents = sorted(orchestrator.registry.values(), key=lambda agent: agent.name.lower())
-    if not agents:
-        print("No agents registered.")
-    else:
-        print("Available agents:")
-        for agent in agents:
-            print(f"- {agent.name}: {agent.description}")
-    return 0
-
-
-def _handle_run(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
-    """Execute the requested agent and display its response."""
-    result = orchestrator.run(agent_name=args.agent, message=args.message)
-    print(f"Agent: {result.agent_name}")
-    print(f"Input: {result.request or '(no content)'}")
-    print(f"Output: {result.response}")
-    return 0
-
-
-def _handle_workflow(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
-    """Execute a sequence of agents, passing each response to the next."""
-    if args.agents:
-        agent_sequence = [name.strip() for name in args.agents.split(",") if name.strip()]
-    else:
-        agent_sequence = ["planner", "builder", "auditor"]
-
-    if not agent_sequence:
-        print("No agents specified for workflow execution.")
-        return 0
-
-    results = orchestrator.run_sequence(agent_sequence, args.message)
-    for result in results:
-        print("=" * 40)
-        print(f"Agent: {result.agent_name}")
-        print(f"Input: {result.request or '(no content)'}")
-        print(f"Output:\n{result.response}")
-    print("=" * 40)
-    print("Workflow completed.")
-
-    if not args.no_save:
-        metadata = {"initial_message": args.message}
-        if args.meta:
-            metadata.update(_parse_meta(args.meta))
-        transcript_path = write_transcript(
-            results,
-            orchestrator.settings,
-            output_path=args.output,
-            metadata=metadata,
-            namespace=args.namespace,
-            filename=args.filename,
+def _handle_paper(args: argparse.Namespace, bot: MicrostructureBot) -> int:
+    """Run the microstructure bot in paper mode and print outcomes."""
+    # If token addresses are provided, attempt to resolve the DEX pair/pool
+    if getattr(args, "token0", None) and getattr(args, "token1", None):
+        pair_addr = _resolve_pair_address(
+            token0=args.token0,
+            token1=args.token1,
+            dex=getattr(args, "dex", "uniswap-v2"),
+            chain_id=getattr(args, "chain_id", 1),
+            fee_bps=getattr(args, "fee_bps", None),
         )
-        print(f"Transcript saved to {transcript_path}")
+        if pair_addr:
+            print(f"Resolved Pair ({getattr(args, 'dex', 'uniswap-v2')}, chain {getattr(args, 'chain_id', 1)}): {pair_addr}")
+        else:
+            print("Warning: Could not resolve pair/pool for provided tokens.")
+
+    outcomes = bot.run_paper(loops=args.loops)
+    print("Paper Trading Outcomes:")
+    for i, out in enumerate(outcomes, start=1):
+        line = [f"[{i}] State: {out.state}"]
+        if out.signal is not None:
+            s = out.signal
+            line.append(
+                f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
+            )
+        if out.position is not None:
+            line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
+        if out.exited:
+            line.append("Exited")
+        print(" | ".join(line))
     return 0
 
 
-def _parse_meta(kv_pairs: list[str]) -> dict[str, str]:
-    metadata: dict[str, str] = {}
-    for raw in kv_pairs:
-        if "=" not in raw:
-            raise SystemExit(f"Invalid metadata entry '{raw}'. Use KEY=VALUE format.")
-        key, value = raw.split("=", 1)
-        key = key.strip()
-        if not key:
-            raise SystemExit("Metadata key cannot be empty.")
-        metadata[key] = value.strip()
-    return metadata
+def _resolve_pair_address(
+    token0: str,
+    token1: str,
+    dex: str = "uniswap-v2",
+    chain_id: int = 1,
+    fee_bps: Optional[int] = None,
+) -> Optional[str]:
+    """Resolve a DEX pair/pool address for two tokens using The Graph.
+
+    Supports:
+    - Uniswap V2 (pairs)
+    - Uniswap V3 (pools) with optional fee tier
+    """
+    t0 = token0.lower()
+    t1 = token1.lower()
+    if chain_id != 1:
+        # Only Ethereum mainnet supported by default here
+        return None
+    if dex == "uniswap-v2":
+        url = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v2"
+        q_exact = "query($a:String!,$b:String!){pairs(where:{token0:$a, token1:$b}){ id token0{ id } token1{ id } }}"
+        q_reverse = "query($a:String!,$b:String!){pairs(where:{token0:$b, token1:$a}){ id token0{ id } token1{ id } }}"
+        for q in (q_exact, q_reverse):
+            resp = requests.post(url, json={"query": q, "variables": {"a": t0, "b": t1}}, timeout=10)
+            if resp.ok:
+                data = resp.json().get("data", {}).get("pairs", [])
+                if data:
+                    return data[0]["id"]
+    elif dex == "uniswap-v3":
+        url = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3"
+        # Filter by fee tier if provided
+        if fee_bps is not None:
+            q_exact = (
+                "query($a:String!,$b:String!,$fee:Int!){pools(where:{token0:$a, token1:$b, feeTier:$fee})"
+                "{ id token0{ id } token1{ id } feeTier }}"
+            )
+            q_reverse = (
+                "query($a:String!,$b:String!,$fee:Int!){pools(where:{token0:$b, token1:$a, feeTier:$fee})"
+                "{ id token0{ id } token1{ id } feeTier }}"
+            )
+            vars = {"a": t0, "b": t1, "fee": int(fee_bps)}
+        else:
+            q_exact = (
+                "query($a:String!,$b:String!){pools(where:{token0:$a, token1:$b})"
+                "{ id token0{ id } token1{ id } feeTier }}"
+            )
+            q_reverse = (
+                "query($a:String!,$b:String!){pools(where:{token0:$b, token1:$a})"
+                "{ id token0{ id } token1{ id } feeTier }}"
+            )
+            vars = {"a": t0, "b": t1}
+        for q in (q_exact, q_reverse):
+            resp = requests.post(url, json={"query": q, "variables": vars}, timeout=10)
+            if resp.ok:
+                data = resp.json().get("data", {}).get("pools", [])
+                if data:
+                    # If multiple, prefer lowest fee
+                    data.sort(key=lambda p: int(p.get("feeTier", 99999)))
+                    return data[0]["id"]
+    return None
 
 
 def _build_github_client(args_repo: str | None, settings: Settings) -> GitHubClient:
@@ -203,8 +196,8 @@ def _build_github_client(args_repo: str | None, settings: Settings) -> GitHubCli
     return GitHubClient(repo=repo)
 
 
-def _handle_issue_read(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
-    client = _build_github_client(args.repo, orchestrator.settings)
+def _handle_issue_read(args: argparse.Namespace, bot: MicrostructureBot) -> int:
+    client = _build_github_client(args.repo, bot.settings)
     try:
         issue_data = client.read_issue(args.issue)
     except GitHubError as exc:  # pragma: no cover - CLI error path
@@ -228,8 +221,8 @@ def _handle_issue_read(args: argparse.Namespace, orchestrator: TokBotOrchestrato
     return 0
 
 
-def _handle_issue_comment(args: argparse.Namespace, orchestrator: TokBotOrchestrator) -> int:
-    client = _build_github_client(args.repo, orchestrator.settings)
+def _handle_issue_comment(args: argparse.Namespace, bot: MicrostructureBot) -> int:
+    client = _build_github_client(args.repo, bot.settings)
     try:
         client.create_comment(args.issue, args.body)
     except GitHubError as exc:  # pragma: no cover - CLI error path

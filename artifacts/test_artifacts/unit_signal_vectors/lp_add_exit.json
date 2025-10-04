@@ -1,0 +1,12 @@
+{
+  "name": "lp_add_exit",
+  "result": {
+    "name": "lp_add_exit",
+    "exit": true
+  },
+  "expect": {
+    "exit": true,
+    "exit_reason": "LD_positive"
+  },
+  "pass": true
+}

@@ -19,7 +19,7 @@ def _default_runner(args: List[str]) -> subprocess.CompletedProcess:
     return subprocess.run(args, check=False, capture_output=True, text=True)
 
 
-@dataclass(slots=True)
+@dataclass
 class GitHubClient:
     """Interact with GitHub Issues via the ``gh`` CLI."""
 

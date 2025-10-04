@@ -1,0 +1,15 @@
+{
+  "name": "strong_momentum_entry",
+  "result": {
+    "name": "strong_momentum_entry",
+    "enter": true
+  },
+  "expect": {
+    "enter": true,
+    "size_range_usd": [
+      100,
+      1500
+    ]
+  },
+  "pass": true
+}

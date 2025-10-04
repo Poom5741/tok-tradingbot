@@ -1,0 +1,8 @@
+{
+  "name": "quiet_market_backoff",
+  "cooldown_factor": 2.0,
+  "expect": {
+    "cooldown_factor_min": 2.0
+  },
+  "pass": true
+}
