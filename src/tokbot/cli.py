@@ -62,7 +62,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--loops",
         type=int,
         default=1,
-        help="Number of iterations (decisions) to run",
+        help="Number of iterations (decisions) to run (<=0 for infinite)",
     )
     live_parser.add_argument(
         "--unsafe-live",
@@ -195,22 +195,42 @@ def _handle_live(args: argparse.Namespace, bot: MicrostructureBot) -> int:
         else:
             print("Warning: Could not resolve pair/pool for provided tokens.")
 
+    import time
+    loops = getattr(args, "loops", 1)
     print("Starting live mode (DRY-RUN)…")
-    outcomes = runner.run_dry(loops=getattr(args, "loops", 1), pair_address=pair_addr)
-    print("Live Mode Outcomes (DRY-RUN):")
-    for i, out in enumerate(outcomes, start=1):
-        line = [f"[{i}] State: {out.state}"]
-        if out.signal is not None:
-            s = out.signal
-            line.append(
-                f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
-            )
-        if out.position is not None:
-            line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
-        if out.exited:
-            line.append("Exited")
-        print(" | ".join(line))
-    print("Note: On-chain execution is not implemented yet; this run performs no transactions.")
+    if loops <= 0:
+        print("Running infinite loop. Press Ctrl+C to stop.")
+        while True:
+            outcomes = runner.run_dry(loops=1, pair_address=pair_addr)
+            for i, out in enumerate(outcomes, start=1):
+                line = [f"[{i}] State: {out.state}"]
+                if out.signal is not None:
+                    s = out.signal
+                    line.append(
+                        f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
+                    )
+                if out.position is not None:
+                    line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
+                if out.exited:
+                    line.append("Exited")
+                print(" | ".join(line))
+            time.sleep(1.0)
+    else:
+        outcomes = runner.run_dry(loops=loops, pair_address=pair_addr)
+        print("Live Mode Outcomes (DRY-RUN):")
+        for i, out in enumerate(outcomes, start=1):
+            line = [f"[{i}] State: {out.state}"]
+            if out.signal is not None:
+                s = out.signal
+                line.append(
+                    f"FT={s.ft:.2f} IP={s.ip_bps:.1f} SE={s.se:.2f} OFI={s.ofi:.2f} LD={s.ld:.2f} DEV={s.dev_bps:.1f}"
+                )
+            if out.position is not None:
+                line.append(f"Pos size={out.position.size:.2f} entry={out.position.entry_price:.2f}")
+            if out.exited:
+                line.append("Exited")
+            print(" | ".join(line))
+        print("Note: On-chain execution is not implemented yet; this run performs no transactions.")
     return 0
 
 

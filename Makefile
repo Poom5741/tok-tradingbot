@@ -9,7 +9,9 @@ RUFF    := $(shell [ -x .venv/bin/ruff ] && echo .venv/bin/ruff || echo ruff)
 # Runtime configuration
 PYTHONPATH ?= src
 ENV_FILE    ?= .env
+# Paper default: small finite run; Live default: infinite (Ctrl+C to stop)
 LOOPS       ?= 2
+LIVE_LOOPS  ?= 0
 DEX         ?= uniswap-v2
 FEE_BPS     ?= 3000
 
@@ -27,7 +29,7 @@ help:
 	@echo "  telegram      Start Telegram bot (uses ENV_FILE)"
 	@echo "  paper         Run paper-trading loop (set LOOPS)"
 	@echo "  paper-pair    Run paper with pair resolution (set TOKEN0,TOKEN1, DEX, FEE_BPS)"
-	@echo "  live          Run live mode (DRY-RUN)"
+	@echo "  live          Run live mode (DRY-RUN; set LIVE_LOOPS)"
 	@echo "  lint          Run ruff check"
 	@echo "  format        Run ruff format"
 	@echo "  test          Run pytest"
@@ -63,7 +65,7 @@ paper-pair:
 	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot paper --loops $(LOOPS) --token0 $(TOKEN0) --token1 $(TOKEN1) --dex $(DEX) --fee-bps $(FEE_BPS)
 
 live:
-	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) live --loops $(LOOPS)
+	PYTHONPATH=$(PYTHONPATH) $(PY) -m tokbot --env-file $(ENV_FILE) live --loops $(LIVE_LOOPS)
 
 lint:
 	$(RUFF) check src tests || true
